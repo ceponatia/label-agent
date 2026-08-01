@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "label-agent"
+version = "0.1.0"
+description = "Watches Gmail for Poshmark/Vinted shipping labels, normalizes them to 4x6, and prints via CUPS"
+requires-python = ">=3.12"
+dependencies = [
+    "pymupdf",
+    "opencv-python-headless",
+    "numpy",
+    "imap-tools",
+    "fastapi",
+    "uvicorn[standard]",
+    "jinja2",
+    "apscheduler",
+    "anthropic",
+    "python-dotenv",
+    "pyzbar",
+    "pillow",
+    "python-multipart",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "httpx"]
+
+[project.scripts]
+label-agent = "labelagent.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["labelagent*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

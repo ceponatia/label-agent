@@ -1,0 +1,38 @@
+{% extends "layout.html" %}
+{% block title %}Errors &middot; Label Agent{% endblock %}
+
+{% block content %}
+<section class="card">
+  <h1 class="title">Warnings &amp; errors</h1>
+  <div class="filters">
+    <a class="pill {{ 'on' if not selected_stage }}" href="/errors">all</a>
+    {% for stage in stages %}
+      <a class="pill {{ 'on' if selected_stage == stage }}" href="/errors?stage={{ stage }}">{{ stage }}</a>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="card">
+  {% if events %}
+    <ul class="list events">
+      {% for event in events %}
+        <li class="row level-{{ event.level }}">
+          <span class="row-text">
+            <span class="row-meta">
+              <span class="badge level-{{ event.level }}">{{ event.level }}</span>
+              <span class="badge stage">{{ event.stage }}</span>
+              <span class="time">{{ event.created_at }}</span>
+            </span>
+            <span class="msg">{{ event.message }}</span>
+          </span>
+          {% if event.label_id %}
+            <a class="btn small" href="/labels/{{ event.label_id }}">Label #{{ event.label_id }}</a>
+          {% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="empty">No warnings or errors{{ ' for ' ~ selected_stage if selected_stage }}.</p>
+  {% endif %}
+</section>
+{% endblock %}

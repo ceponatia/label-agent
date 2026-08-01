@@ -1,0 +1,60 @@
+# Label Agent configuration (non-secret settings).
+# Copy to config.toml next to the working directory the service runs from.
+# Every key is optional; the value shown is the built-in default.
+# Any key can also be overridden by the environment variable listed after it,
+# which always wins over this file. Secrets belong in .env, not here.
+
+# --- storage ---------------------------------------------------------------
+# All state (SQLite DB + label PDFs) lives under this directory.
+# env: LABELAGENT_DATA_DIR
+data_dir = "data"
+
+# SQLite file. Defaults to <data_dir>/labelagent.db when unset.
+# env: LABELAGENT_DB_PATH
+# db_path = "data/labelagent.db"
+
+# Delete label PDFs older than this many days (DB rows are kept forever).
+# env: LABELAGENT_LABEL_RETENTION_DAYS
+label_retention_days = 90
+
+# --- ingestion -------------------------------------------------------------
+# Minutes between Gmail polls.
+# env: LABELAGENT_POLL_INTERVAL_MIN
+poll_interval_min = 3
+
+# env: LABELAGENT_IMAP_HOST
+imap_host = "imap.gmail.com"
+
+# env: LABELAGENT_IMAP_FOLDER
+imap_folder = "INBOX"
+
+# Sender domains that mark an email as a label candidate.
+# env: LABELAGENT_POSHMARK_SENDER_DOMAIN / LABELAGENT_VINTED_SENDER_DOMAIN
+poshmark_sender_domain = "poshmark.com"
+vinted_sender_domain = "vinted.com"
+
+# --- printing --------------------------------------------------------------
+# CUPS destination name (see `lpstat -p`). Leave empty (or "file") to use the
+# FilePrinter fake, which just copies PDFs into <data_dir>/printed/.
+# env: LABELAGENT_PRINTER
+printer_name = ""
+
+# CUPS media / tray options; discover real values with `lpoptions -l -d <name>`.
+# env: LABELAGENT_PRINT_MEDIA / LABELAGENT_PRINT_MEDIA_SOURCE
+print_media = "na_index-4x6_4x6in"
+print_media_source = "rear"
+
+# Print ready labels without waiting for a tap in the web UI.
+# env: LABELAGENT_AUTO_PRINT
+auto_print = true
+
+# --- web app ---------------------------------------------------------------
+# LAN-only control panel bind address.
+# env: LABELAGENT_WEB_HOST / LABELAGENT_WEB_PORT
+web_host = "0.0.0.0"
+web_port = 8080
+
+# --- llm -------------------------------------------------------------------
+# Model used for email classification and crop verification.
+# env: LABELAGENT_CLASSIFIER_MODEL
+classifier_model = "claude-haiku-4-5"

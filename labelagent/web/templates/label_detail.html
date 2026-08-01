@@ -1,0 +1,91 @@
+{% extends "layout.html" %}
+{% import "macros.html" as m %}
+{% block title %}{{ label.item_title or 'Label' }} &middot; Label Agent{% endblock %}
+
+{% block content %}
+<section class="card">
+  <p class="crumb"><a href="/">&larr; Dashboard</a></p>
+  <h1 class="title">{{ label.item_title or 'Untitled label' }}</h1>
+  <p class="row-meta">
+    {{ m.platform_badge(label.platform) }}
+    {{ m.status_badge(label.status) }}
+    <span class="time">#{{ label.id }}</span>
+  </p>
+
+  {% if needs_attention and label.status_detail %}
+    <p class="alert">{{ label.status_detail }}</p>
+  {% endif %}
+
+  <div class="actions">
+    <button class="btn primary" hx-post="/api/labels/{{ label.id }}/print"
+            hx-target="#result-{{ label.id }}" hx-swap="innerHTML">
+      {{ 'Reprint' if label.print_count else 'Print' }}
+    </button>
+    <button class="btn" hx-post="/api/labels/{{ label.id }}/print?which=original"
+            hx-target="#result-{{ label.id }}" hx-swap="innerHTML">Print original</button>
+    <span class="result" id="result-{{ label.id }}"></span>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Previews</h2>
+  <div class="previews">
+    <figure>
+      <figcaption>Original</figcaption>
+      {% if has_original_pdf %}
+        <a href="/api/labels/{{ label.id }}/original.pdf">
+          <img src="/api/labels/{{ label.id }}/preview.png?which=original" alt="Original label PDF">
+        </a>
+      {% else %}
+        <p class="empty">No original PDF stored.</p>
+      {% endif %}
+    </figure>
+    <figure>
+      <figcaption>Print (4&times;6)</figcaption>
+      {% if has_print_pdf %}
+        <a href="/api/labels/{{ label.id }}/print.pdf">
+          <img src="/api/labels/{{ label.id }}/preview.png?which=print" alt="Normalized 4x6 label">
+        </a>
+      {% else %}
+        <p class="empty">Not normalized yet.</p>
+      {% endif %}
+    </figure>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Details</h2>
+  <table class="meta">
+    <tbody>
+      <tr><th>Platform</th><td>{{ label.platform }}</td></tr>
+      <tr><th>Item</th><td>{{ label.item_title or '—' }}</td></tr>
+      <tr><th>Order ref</th><td>{{ label.order_ref or '—' }}</td></tr>
+      <tr><th>Tracking</th><td>{{ label.tracking_number or '—' }}</td></tr>
+      <tr><th>Ship by</th><td>{{ label.ship_by or '—' }}</td></tr>
+      <tr><th>Status</th><td>{{ label.status | pretty }}</td></tr>
+      <tr><th>Status detail</th><td>{{ label.status_detail or '—' }}</td></tr>
+      <tr><th>Print count</th><td>{{ label.print_count }}</td></tr>
+      <tr><th>Email received</th><td>{{ label.email_received_at or '—' }}</td></tr>
+      <tr><th>Created</th><td>{{ label.created_at or '—' }}</td></tr>
+      <tr><th>Printed</th><td>{{ label.printed_at or '—' }}</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h2>Timeline</h2>
+  {% if events %}
+    <ol class="timeline">
+      {% for event in events %}
+        <li class="level-{{ event.level }}">
+          <span class="time">{{ event.created_at | hhmm }}</span>
+          <span class="badge stage">{{ event.stage }}</span>
+          <span class="msg">{{ event.message }}</span>
+        </li>
+      {% endfor %}
+    </ol>
+  {% else %}
+    <p class="empty">No events recorded.</p>
+  {% endif %}
+</section>
+{% endblock %}

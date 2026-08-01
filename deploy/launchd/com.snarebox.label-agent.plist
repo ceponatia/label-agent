@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd agent for the macOS host.
+
+  Replace /Users/CHANGEME/label-agent everywhere below with the real repo path,
+  then:
+
+    mkdir -p /Users/CHANGEME/label-agent/data/logs
+    cp deploy/launchd/com.snarebox.label-agent.plist ~/Library/LaunchAgents/
+    launchctl load -w ~/Library/LaunchAgents/com.snarebox.label-agent.plist
+
+  It runs as the logged-in user (not root) so it can reach the user's CUPS
+  queues and the WiFi printer.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.snarebox.label-agent</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/CHANGEME/label-agent/.venv/bin/python</string>
+    <string>-m</string>
+    <string>labelagent</string>
+    <string>serve</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/CHANGEME/label-agent</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <!-- Do not respawn faster than this after a crash. -->
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <key>StandardOutPath</key>
+  <string>/Users/CHANGEME/label-agent/data/logs/label-agent.out.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/CHANGEME/label-agent/data/logs/label-agent.err.log</string>
+
+  <!-- lp and lpstat live in /usr/bin; launchd does not inherit a login PATH. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin</string>
+  </dict>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

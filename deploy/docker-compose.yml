@@ -1,0 +1,25 @@
+# Run from the repo root:
+#   docker compose -f deploy/docker-compose.yml up -d --build
+#
+# Paths below are relative to this file, i.e. ../data is the repo's data/.
+
+services:
+  label-agent:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    # The printer is a WiFi device on the LAN and CUPS/IPP discovery does not
+    # survive Docker's NAT bridge, so the container shares the host's network
+    # stack. Side effect: the web app is on the host's port 8080 directly, and
+    # no `ports:` mapping is needed (or allowed).
+    network_mode: host
+    volumes:
+      # SQLite DB, label PDFs, logs - the only state there is.
+      - ../data:/data
+      # Non-secret settings and secrets, both read-only. Create them first:
+      # cp config.example.toml config.toml && cp .env.example .env
+      - ../config.toml:/app/config.toml:ro
+      - ../.env:/app/.env:ro
+    environment:
+      LABELAGENT_DATA_DIR: /data
+    restart: unless-stopped

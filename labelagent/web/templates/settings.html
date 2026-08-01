@@ -1,0 +1,62 @@
+{% extends "layout.html" %}
+{% block title %}Settings &middot; Label Agent{% endblock %}
+
+{% block content %}
+{% if saved %}<p class="alert ok">Settings saved.</p>{% endif %}
+
+<section class="card">
+  <h1 class="title">Settings</h1>
+  <form class="form" method="post" action="/api/settings">
+    <label for="poll_interval_min">Check email every</label>
+    <div class="field-row">
+      <input type="number" id="poll_interval_min" name="poll_interval_min" min="1" max="120"
+             value="{{ poll_interval_min }}" inputmode="numeric">
+      <span class="unit">minutes</span>
+    </div>
+
+    <label class="check">
+      <input type="hidden" name="auto_print" value="off">
+      <input type="checkbox" name="auto_print" value="on" {{ 'checked' if auto_print }}>
+      Auto-print new labels
+    </label>
+    <p class="help">When off, labels are still ingested and prepared; you print them by tapping Print.</p>
+
+    <label for="printer_name">Printer name</label>
+    <input type="text" id="printer_name" name="printer_name" value="{{ printer_name }}"
+           autocapitalize="off" autocorrect="off" spellcheck="false"
+           placeholder="e.g. Canon_TS9521">
+    <p class="help">The CUPS queue name (<code>lpstat -p</code>). Changing it takes effect when the
+       service restarts.</p>
+
+    <button class="btn primary" type="submit">Save settings</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Printer</h2>
+  <p class="row-meta">
+    <span class="dot {{ 'ok' if state.printer_available else 'bad' }}"></span>
+    {{ state.printer_name or 'no printer configured' }}
+    &mdash; {{ 'available' if state.printer_available else 'unreachable' }}
+  </p>
+  <div class="actions">
+    <button class="btn" hx-post="/api/agent/test-print"
+            hx-target="#test-print-result" hx-swap="innerHTML"
+            hx-indicator="#test-print-result">Test print</button>
+    <span class="result" id="test-print-result"></span>
+  </div>
+  <p class="help">Prints a calibration page so you can check the tray and margins without using a real label.</p>
+</section>
+
+<section class="card">
+  <h2>About</h2>
+  <table class="meta">
+    <tbody>
+      <tr><th>Version</th><td>{{ version }}</td></tr>
+      <tr><th>Config file</th><td><code>{{ config_path }}</code></td></tr>
+      <tr><th>Data directory</th><td><code>{{ data_dir }}</code></td></tr>
+      <tr><th>Database</th><td><code>{{ db_path }}</code></td></tr>
+    </tbody>
+  </table>
+</section>
+{% endblock %}

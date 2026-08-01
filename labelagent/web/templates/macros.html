@@ -1,0 +1,43 @@
+{% macro platform_badge(platform) -%}
+<span class="badge platform-{{ platform }}">{{ platform }}</span>
+{%- endmacro %}
+
+{% macro status_badge(status) -%}
+<span class="badge status-{{ status }}">{{ status | pretty }}</span>
+{%- endmacro %}
+
+{% macro thumb(label) -%}
+{% if label.print_path or label.original_path %}
+<img class="thumb" loading="lazy" alt=""
+     src="/api/labels/{{ label.id }}/preview.png?which={{ 'print' if label.print_path else 'original' }}">
+{% else %}
+<span class="thumb thumb-empty" aria-hidden="true"></span>
+{% endif %}
+{%- endmacro %}
+
+{% macro print_button(label, text='Print') -%}
+<button class="btn small"
+        hx-post="/api/labels/{{ label.id }}/print"
+        hx-target="#result-{{ label.id }}"
+        hx-swap="innerHTML"
+        hx-indicator="#result-{{ label.id }}">{{ text }}</button>
+<span class="result" id="result-{{ label.id }}"></span>
+{%- endmacro %}
+
+{% macro label_row(label, action_text='Print') -%}
+<li class="row">
+  <a class="row-main" href="/labels/{{ label.id }}">
+    {{ thumb(label) }}
+    <span class="row-text">
+      <span class="row-title">{{ label.item_title or 'Untitled label' }}</span>
+      <span class="row-meta">
+        {{ platform_badge(label.platform) }}
+        {{ status_badge(label.status) }}
+        <span class="time">{{ (label.printed_at or label.created_at) | hhmm }}</span>
+      </span>
+      {% if label.status_detail %}<span class="row-detail">{{ label.status_detail }}</span>{% endif %}
+    </span>
+  </a>
+  <span class="row-actions">{{ print_button(label, action_text) }}</span>
+</li>
+{%- endmacro %}

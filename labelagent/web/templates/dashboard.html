@@ -1,0 +1,48 @@
+{% extends "layout.html" %}
+{% import "macros.html" as m %}
+{% block title %}Dashboard &middot; Label Agent{% endblock %}
+
+{% block content %}
+{% include "fragments/status_card.html" %}
+
+<section class="chips" aria-label="Today">
+  <a class="chip" href="/history">
+    <span class="n">{{ counts.printed }}</span><span class="l">printed today</span>
+  </a>
+  <a class="chip" href="/history">
+    <span class="n">{{ counts.pending }}</span><span class="l">pending</span>
+  </a>
+  <a class="chip {{ 'warn' if counts.needs_review }}" href="/history">
+    <span class="n">{{ counts.needs_review }}</span><span class="l">needs review</span>
+  </a>
+  <a class="chip {{ 'bad' if counts.errors }}" href="/errors">
+    <span class="n">{{ counts.errors }}</span><span class="l">errors today</span>
+  </a>
+</section>
+
+<section class="card">
+  <h2>Needs attention</h2>
+  {% if attention %}
+    <ul class="list">
+      {% for label in attention %}
+        {{ m.label_row(label, 'Print anyway' if label.status == 'duplicate' else 'Print') }}
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="empty">Nothing waiting. Everything printed or in flight.</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Today's labels</h2>
+  {% if recent %}
+    <ul class="list">
+      {% for label in recent %}
+        {{ m.label_row(label, 'Reprint' if label.status == 'printed' else 'Print') }}
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="empty">No labels yet today.</p>
+  {% endif %}
+</section>
+{% endblock %}

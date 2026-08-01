@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>{% block title %}Label Agent{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='/style.css') }}">
+  <link rel="manifest" href="{{ url_for('static', path='/manifest.webmanifest') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', path='/apple-touch-icon.png') }}">
+  <link rel="icon" href="{{ url_for('static', path='/apple-touch-icon.png') }}">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Label Agent">
+  <meta name="theme-color" content="#0f172a">
+  <script src="{{ url_for('static', path='/htmx.min.js') }}" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">Label&nbsp;Agent</a>
+    <nav class="nav">
+      <a href="/" class="{{ 'on' if active == 'dashboard' }}">Dashboard</a>
+      <a href="/history" class="{{ 'on' if active == 'history' }}">History</a>
+      <a href="/errors" class="{{ 'on' if active == 'errors' }}">Errors</a>
+      <a href="/settings" class="{{ 'on' if active == 'settings' }}">Settings</a>
+    </nav>
+  </header>
+
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="foot">Label Agent v{{ version }} &middot; local network only</footer>
+</body>
+</html>

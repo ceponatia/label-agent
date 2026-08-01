@@ -1,0 +1,8 @@
+<div class="result-box">
+  <strong>Checked at {{ state.last_poll_at or 'now' }}</strong>
+  <ul class="kv">
+    {% for key, value in summary.items() %}
+      <li><span class="k">{{ key | pretty }}</span><span class="v">{{ value }}</span></li>
+    {% endfor %}
+  </ul>
+</div>
