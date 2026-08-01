@@ -329,6 +329,60 @@ def test_a_failed_job_goes_back_to_waiting(db, config, printer):
     assert db.get_label(1).print_count == 0
 
 
+def test_a_cancelled_job_is_never_counted_as_printed(db, config, printer):
+    """Killing the job in CUPS used to read as a clean finish and mark it printed."""
+    service = make_service(db, config, printer, "poshmark-direct")
+    service.pause()
+    service.check_now()
+
+    service.printer = OfflinePrinter(available_flag=True)
+    service.printer.job_status = lambda job_id: JobStatus.CANCELLED
+
+    assert service.print_label(1)["ok"] is True  # CUPS took it, then it was killed
+    label = db.get_label(1)
+    assert label.status == LabelStatus.FAILED
+    assert label.print_count == 0
+    assert "cancelled at the printer" in label.status_detail
+    assert db.list_events(level=Level.ERROR, stage=Stage.PRINT, label_id=1)
+
+    # a cancel is a decision; retrying would send the label back behind her back
+    assert service.retry_waiting() == []
+
+
+def test_a_job_that_aged_out_of_cups_counts_as_printed(db, config, printer):
+    """CUPS forgets finished jobs, which must not buy the parcel a second label."""
+    service = make_service(db, config, printer, "poshmark-direct")
+    service.pause()
+    service.check_now()
+    db.update_status(1, LabelStatus.PRINTING, f"{JOB_PREFIX}job-9")
+
+    service.printer = OfflinePrinter(available_flag=True)
+    service.printer.job_status = lambda job_id: JobStatus.UNKNOWN
+
+    assert service.reap_jobs() == [1]
+    label = db.get_label(1)
+    assert label.status == LabelStatus.PRINTED
+    assert label.print_count == 1
+    assert label.status_detail is None
+    assert service.retry_waiting() == []
+
+
+def test_a_job_cups_never_queued_goes_back_to_waiting(db, config, printer):
+    """Same missing job, but never seen printing: that one really did not print."""
+    service = make_service(db, config, printer, "poshmark-direct")
+    service.pause()
+    service.check_now()
+    db.update_status(1, LabelStatus.QUEUED, f"{JOB_PREFIX}job-9")
+
+    service.printer = OfflinePrinter(available_flag=True)
+    service.printer.job_status = lambda job_id: JobStatus.UNKNOWN
+
+    assert service.reap_jobs() == []
+    label = db.get_label(1)
+    assert label.status == LabelStatus.WAITING_FOR_PRINTER
+    assert label.print_count == 0
+
+
 def test_a_pending_job_becomes_printing(db, config, printer):
     service = make_service(db, config, printer, "poshmark-direct")
     service.pause()
