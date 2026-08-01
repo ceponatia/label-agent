@@ -416,10 +416,18 @@ class AgentService:
             state = JobStatus.UNREACHABLE
 
         if state == JobStatus.COMPLETED:
-            self.db.mark_printed(label.id)
-            self.db.update_label(label.id, status_detail=None)
-            self.db.add_event(Stage.PRINT, Level.INFO, f"printed (job {job_id})", label.id)
-            return True
+            return self._mark_printed(label.id, f"printed (job {job_id})")
+        if state == JobStatus.UNKNOWN:
+            return self._reap_forgotten(label, job_id)
+        if state == JobStatus.CANCELLED:
+            # Nothing came out, and somebody already made a decision about this
+            # job at the printer. Fail it rather than parking it in
+            # `waiting_for_printer`, where retry_waiting would quietly send it
+            # back and undo the cancel. The row keeps its Print button.
+            self._fail(
+                label.id, f"print job {job_id} was cancelled at the printer", Stage.PRINT
+            )
+            return False
         if state == JobStatus.FAILED:
             self._wait_for_printer(label.id, f"print job {job_id} failed", Level.WARN)
             return False
@@ -430,6 +438,34 @@ class AgentService:
             return False
         if label.status != LabelStatus.PRINTING:
             self.db.update_status(label.id, LabelStatus.PRINTING, label.status_detail)
+        return False
+
+    def _mark_printed(self, label_id: int, message: str) -> bool:
+        self.db.mark_printed(label_id)
+        self.db.update_label(label_id, status_detail=None)
+        self.db.add_event(Stage.PRINT, Level.INFO, message, label_id)
+        return True
+
+    def _reap_forgotten(self, label: Label, job_id: str) -> bool:
+        """Settle a job CUPS has no record of.
+
+        CUPS keeps finished jobs only as long as MaxJobs and PreserveJobHistory
+        allow, so a job we watched go through the queue and can no longer find
+        printed and then aged out. Calling that a failure sent the label to
+        `waiting_for_printer`, where retry_waiting bought a second physical
+        label for a parcel that already had one.
+
+        A label still sitting in `queued` is the other story: reaping follows
+        submission closely enough that a real job is always on a queue by the
+        time we first look, so one that was never seen there never printed.
+        """
+        if label.status == LabelStatus.PRINTING:
+            return self._mark_printed(
+                label.id, f"printed (job {job_id}, since dropped from the CUPS history)"
+            )
+        self._wait_for_printer(
+            label.id, f"print job {job_id} never reached the queue", Level.WARN
+        )
         return False
 
     def test_print(self) -> dict:

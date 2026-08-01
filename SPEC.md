@@ -284,6 +284,7 @@ env file readable only by the service user.
 | crop | no bounding box found | `needs_review` | print-original fallback offered |
 | verify | barcode cut off | `needs_review` | side-by-side review UI |
 | print | CUPS error, printer off | `waiting_for_printer` | backoff retry + reappearance trigger |
+| print | job cancelled or aborted at the printer | `failed` | none — a human stopped this job; Print reprints it |
 
 Rule: **an error never deletes or skips a label silently** — every shipment
 email that passes classification exists as a row Elaine can see and act on.

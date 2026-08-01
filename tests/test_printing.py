@@ -31,9 +31,13 @@ class FakeRun:
     def __init__(self, results: dict):
         self.results = results
         self.calls: list[list[str]] = []
+        self.envs: list[dict | None] = []
 
-    def __call__(self, cmd, capture_output=False, text=False, timeout=None, check=False):
+    def __call__(
+        self, cmd, capture_output=False, text=False, timeout=None, check=False, env=None
+    ):
         self.calls.append(cmd)
+        self.envs.append(env)
         outcome = self.results[cmd[0]]
         if isinstance(outcome, list):
             outcome = outcome.pop(0)
@@ -176,7 +180,23 @@ def test_cups_submit_raises_on_unparseable_output(monkeypatch, pdf):
 # --- CupsPrinter.job_status ------------------------------------------------
 
 PENDING_OUT = "Canon_TS9521-42 brian 41984 Sat 01 Aug 2026 03:16:00 PM EDT\n"
-COMPLETED_OUT = "Canon_TS9521-42 brian 41984 Sat 01 Aug 2026 03:16:04 PM EDT\n"
+
+
+def completed_out(job_id: str = "Canon_TS9521-42", reasons: str = "") -> str:
+    """One job in `lpstat -W completed -l -o` form, as CUPS 2.x prints it."""
+    lines = [
+        f"{job_id} brian 41984 Sat 01 Aug 2026 03:16:04 PM EDT",
+        "\tStatus: Canon_TS9521 is idle.",
+    ]
+    if reasons:
+        lines.append(f"\tAlerts: {reasons}")
+    lines.append("\tqueued for Canon_TS9521")
+    return "\n".join(lines) + "\n"
+
+
+def after_the_queue(output: str) -> dict:
+    """lpstat results for a job that is no longer pending."""
+    return {"lpstat": [(0, "", ""), (0, output, "")]}
 
 
 def test_job_status_pending(monkeypatch):
@@ -187,21 +207,78 @@ def test_job_status_pending(monkeypatch):
 
 def test_job_status_completed(monkeypatch):
     fake = install(
-        monkeypatch, {"lpstat": [(0, "", ""), (0, COMPLETED_OUT, "")]}
+        monkeypatch, after_the_queue(completed_out(reasons="job-completed-successfully"))
     )
 
     assert (
         CupsPrinter("Canon_TS9521").job_status("Canon_TS9521-42") is JobStatus.COMPLETED
     )
+    # -l has to precede -o: lpstat acts on each option as it reads it, so asking
+    # for the long format afterwards would print the short one.
     assert fake.calls == [
         ["lpstat", "-W", "not-completed", "-o"],
-        ["lpstat", "-W", "completed", "-o"],
+        ["lpstat", "-W", "completed", "-l", "-o"],
     ]
 
 
-def test_job_status_failed_when_job_is_in_neither_queue(monkeypatch):
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "job-canceled-by-user",
+        "job-canceled-by-operator",
+        "job-cancelled-by-user",  # the other spelling, just in case
+        "aborted-by-system",
+    ],
+)
+def test_a_cancelled_job_is_not_reported_as_printed(monkeypatch, reason):
+    """`-W completed` lists these too; only the reasons say nothing came out."""
+    install(monkeypatch, after_the_queue(completed_out(reasons=reason)))
+    assert (
+        CupsPrinter("Canon_TS9521").job_status("Canon_TS9521-42") is JobStatus.CANCELLED
+    )
+
+
+def test_job_status_completed_when_cups_records_no_reasons(monkeypatch):
+    install(monkeypatch, after_the_queue(completed_out()))
+    assert (
+        CupsPrinter("Canon_TS9521").job_status("Canon_TS9521-42") is JobStatus.COMPLETED
+    )
+
+
+def test_a_neighbours_cancellation_is_not_read_as_ours(monkeypatch):
+    install(
+        monkeypatch,
+        after_the_queue(
+            completed_out("Canon_TS9521-42", "job-completed-successfully")
+            + completed_out("Canon_TS9521-43", "job-canceled-by-user")
+        ),
+    )
+    assert (
+        CupsPrinter("Canon_TS9521").job_status("Canon_TS9521-42") is JobStatus.COMPLETED
+    )
+    install(
+        monkeypatch,
+        after_the_queue(
+            completed_out("Canon_TS9521-41", "job-canceled-by-user")
+            + completed_out("Canon_TS9521-42", "job-completed-successfully")
+        ),
+    )
+    assert (
+        CupsPrinter("Canon_TS9521").job_status("Canon_TS9521-42") is JobStatus.COMPLETED
+    )
+
+
+def test_job_status_reads_lpstat_in_the_c_locale(monkeypatch):
+    """A translated "Alerts:" would read as a job with no reasons, i.e. printed."""
+    fake = install(monkeypatch, after_the_queue(completed_out()))
+    CupsPrinter("Canon_TS9521").job_status("Canon_TS9521-42")
+    assert [env["LC_ALL"] for env in fake.envs] == ["C", "C"]
+
+
+def test_job_status_unknown_when_job_is_in_neither_queue(monkeypatch):
+    """Aged out of the history, or never queued - lpstat cannot tell us which."""
     install(monkeypatch, {"lpstat": (0, "", "")})
-    assert CupsPrinter("P").job_status("P-42") is JobStatus.FAILED
+    assert CupsPrinter("P").job_status("P-42") is JobStatus.UNKNOWN
 
 
 def test_job_status_unreachable_on_nonzero_exit(monkeypatch):
@@ -216,7 +293,7 @@ def test_job_status_unreachable_on_timeout(monkeypatch):
 
 def test_job_status_does_not_match_job_id_prefixes(monkeypatch):
     install(monkeypatch, {"lpstat": (0, "P-420 brian 41984 Sat 01 Aug 2026\n", "")})
-    assert CupsPrinter("P").job_status("P-42") is JobStatus.FAILED
+    assert CupsPrinter("P").job_status("P-42") is JobStatus.UNKNOWN
 
 
 # --- CupsPrinter.available -------------------------------------------------

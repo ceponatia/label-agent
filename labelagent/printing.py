@@ -1,3 +1,4 @@
+import os
 import re
 import shutil
 import subprocess
@@ -9,12 +10,24 @@ from typing import Protocol, runtime_checkable
 TIMEOUT = 10.0
 REQUEST_ID_RE = re.compile(r"request id is (\S+)")
 
+# `lpstat -l` labels the job-state-reasons line; IPP spells it "canceled", but
+# match both spellings so a differently-worded CUPS build cannot read as a
+# successful print.
+ALERTS_PREFIX = "alerts:"
+UNPRINTED_RE = re.compile(r"cancell?ed|aborted", re.IGNORECASE)
+
 
 class JobStatus(StrEnum):
     PENDING = "pending"
     PRINTING = "printing"
     COMPLETED = "completed"
+    # Cancelled by a human or aborted by CUPS: the job is finished and nothing
+    # came out of the printer.
+    CANCELLED = "cancelled"
     FAILED = "failed"
+    # CUPS has never heard of this job - either it dropped out of the history
+    # or it never made it onto a queue. Only the caller knows which.
+    UNKNOWN = "unknown"
     UNREACHABLE = "unreachable"
 
 
@@ -77,12 +90,17 @@ class CupsPrinter:
         if self._has_job(pending, job_id):
             return JobStatus.PENDING
 
-        completed = self._lpstat(["-W", "completed", "-o"])
+        # `-W completed` lists cancelled and aborted jobs next to the ones that
+        # really printed, so being in this queue is not proof of a label. `-l`
+        # adds the job-state-reasons line that tells them apart, and it has to
+        # come before `-o`: lpstat acts on each option as it reads it.
+        completed = self._lpstat(["-W", "completed", "-l", "-o"])
         if completed is None:
             return JobStatus.UNREACHABLE
-        if self._has_job(completed, job_id):
-            return JobStatus.COMPLETED
-        return JobStatus.FAILED
+        alerts = self._job_alerts(completed, job_id)
+        if alerts is None:
+            return JobStatus.UNKNOWN
+        return JobStatus.CANCELLED if UNPRINTED_RE.search(alerts) else JobStatus.COMPLETED
 
     def available(self) -> bool:
         try:
@@ -99,7 +117,13 @@ class CupsPrinter:
     def _lpstat(self, args: list[str]) -> str | None:
         try:
             result = subprocess.run(
-                ["lpstat", *args], capture_output=True, text=True, timeout=TIMEOUT
+                ["lpstat", *args],
+                capture_output=True,
+                text=True,
+                timeout=TIMEOUT,
+                # CUPS translates its output, and a localised "Alerts:" would
+                # read as a job with no reasons - i.e. as a clean print.
+                env={**os.environ, "LC_ALL": "C"},
             )
         except (subprocess.SubprocessError, OSError):
             return None
@@ -110,6 +134,33 @@ class CupsPrinter:
     @staticmethod
     def _has_job(output: str, job_id: str) -> bool:
         return any(line.split(" ", 1)[0] == job_id for line in output.splitlines() if line)
+
+    @staticmethod
+    def _job_alerts(output: str, job_id: str) -> str | None:
+        """`job_id`'s job-state-reasons, or None if CUPS has no such job.
+
+        `lpstat -l` prints a job on one line and indents its details under it:
+
+            Canon_TS9521-42 brian 41984 Sat 01 Aug 2026 03:16:04 PM EDT
+                Alerts: job-canceled-by-user
+                queued for Canon_TS9521
+
+        A job with no Alerts line at all reads as an empty string, i.e. printed:
+        that is the benefit of the doubt this method gave every completed job
+        before it learned to read the reasons, and it keeps a CUPS build that
+        omits the line from parking every label Elaine prints.
+        """
+        found = False
+        for line in output.splitlines():
+            if not line.strip():
+                continue
+            if not line[0].isspace():
+                if found:  # past our job's block; the alerts belong to another
+                    break
+                found = line.split(" ", 1)[0] == job_id
+            elif found and line.strip().lower().startswith(ALERTS_PREFIX):
+                return line.strip()[len(ALERTS_PREFIX) :].strip()
+        return "" if found else None
 
 
 class FilePrinter:
