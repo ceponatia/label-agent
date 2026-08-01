@@ -121,6 +121,10 @@ class StubController:
         self.calls.append(("set_printer_name", name))
         self.printer_name = name
 
+    def reschedule_poll(self) -> int | None:
+        self.calls.append(("reschedule_poll", None))
+        return None
+
     def test_print(self) -> dict:
         self.calls.append(("test_print", None))
         return {"ok": True, "detail": "Calibration page sent to the printer."}
@@ -501,6 +505,11 @@ def create_app(db: Database, config: Config, controller: AgentController) -> Fas
             set_printer_name = getattr(controller, "set_printer_name", None)
             if "printer_name" in updated and set_printer_name is not None:
                 set_printer_name(updated["printer_name"])
+            # Same story for the interval: the poll job baked one in at startup,
+            # so a number saved here means nothing until the timer is retimed.
+            reschedule_poll = getattr(controller, "reschedule_poll", None)
+            if "poll_interval_min" in updated and reschedule_poll is not None:
+                reschedule_poll()
 
         await run_in_threadpool(apply)
 

@@ -236,7 +236,7 @@ def test_settings_page_shows_stored_values(env):
     assert response.status_code == 200
     assert 'value="7"' in response.text
     assert "Kitchen_Canon" in response.text
-    assert "service restarts" in response.text
+    assert "no restart" in response.text
 
 
 # --- agent actions -------------------------------------------------------
@@ -499,6 +499,71 @@ def test_settings_pushes_the_printer_name_to_the_controller(env):
     assert env.db.get_setting("printer_name") == "Canon_TS9521"
     assert ("set_printer_name", "Canon_TS9521") in env.controller.calls
     assert env.controller.state()["printer_name"] == "Canon_TS9521"
+
+
+def test_settings_retimes_the_poll_job(env):
+    """An interval that never reaches the scheduler is just a number in a table."""
+    env.client.post("/api/settings", json={"poll_interval_min": 12})
+    assert env.db.get_setting("poll_interval_min") == "12"
+    assert ("reschedule_poll", None) in env.controller.calls
+
+    # untouched interval, untouched timer
+    env.controller.calls.clear()
+    env.client.post("/api/settings", json={"printer_name": "Canon_TS9521"})
+    assert ("reschedule_poll", None) not in env.controller.calls
+
+
+def test_settings_saves_against_a_bare_controller(tmp_path):
+    """Retiming and renaming the printer are optional extensions to the protocol.
+
+    A controller that implements only `AgentController` still has to be able to
+    save Settings rather than 500 on a missing attribute.
+    """
+
+    class BareController:
+        def state(self) -> dict:
+            return StubController().state()
+
+        def pause(self) -> None: ...
+
+        def resume(self) -> None: ...
+
+        def set_auto_print(self, on: bool) -> None: ...
+
+        def check_now(self) -> dict:
+            return {}
+
+        def print_label(self, label_id: int) -> dict:
+            return {"ok": True, "detail": ""}
+
+        def test_print(self) -> dict:
+            return {"ok": True, "detail": ""}
+
+    db = Database(tmp_path / "bare.db")
+    db.init()
+    config = Config(data_dir=str(tmp_path / "data"), db_path=str(tmp_path / "bare.db"))
+    client = TestClient(create_app(db, config, BareController()))
+
+    response = client.post(
+        "/api/settings", json={"poll_interval_min": 4, "printer_name": "Canon"}
+    )
+    assert response.status_code == 200
+    assert db.get_setting("poll_interval_min") == "4"
+    assert db.get_setting("printer_name") == "Canon"
+    db.close()
+
+
+def test_missing_pdfs_never_recreate_a_pruned_labels_directory(env):
+    """Pruning counts a label with a directory as one with files to delete."""
+    label = add_label(env.db, status=LabelStatus.PRINTED, printed_at=f"{TODAY}T09:05:00")
+    directory = storage.label_dir(env.config.data_dir, label.id)
+
+    assert env.client.get(f"/labels/{label.id}").status_code == 200
+    assert env.client.get(f"/api/labels/{label.id}/print.pdf").status_code == 404
+    assert env.client.get(f"/api/labels/{label.id}/original.pdf").status_code == 404
+    assert env.client.get(f"/api/labels/{label.id}/preview.png").status_code == 404
+
+    assert not directory.exists()
 
 
 def test_a_slow_controller_call_does_not_freeze_the_control_panel(tmp_path):

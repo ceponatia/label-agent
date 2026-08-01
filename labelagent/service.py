@@ -89,6 +89,8 @@ class AgentService:
         )
         self.fetcher_factory = fetcher_factory or make_fetcher
         self._fetcher = None
+        # Set by whoever owns the timers; see set_poll_rescheduler.
+        self._poll_rescheduler: Callable[[], int] | None = None
         # The scheduler and the web app both drive this object; one cycle at a
         # time is what keeps a label from being submitted to CUPS twice.
         self._lock = threading.RLock()
@@ -155,6 +157,31 @@ class AgentService:
         self.db.add_event(
             Stage.SYSTEM, Level.INFO, f"printer set to {name or 'file printer'}"
         )
+
+    def set_poll_rescheduler(self, reschedule: Callable[[], int] | None) -> None:
+        """Accept the timer owner's retiming hook (scheduler.attach_poll_rescheduler).
+
+        The service has no scheduler of its own - `check_now` runs on demand and
+        the timers belong to whoever started them - so this callback is the only
+        route a Settings change has to the running poll job.
+        """
+        self._poll_rescheduler = reschedule
+
+    def reschedule_poll(self) -> int | None:
+        """Re-time the poll job to the interval now in Settings, effective now.
+
+        Returns the minutes applied, or None where no scheduler is attached (the
+        one-shot CLI commands, tests): there is simply no timer to retime.
+        The scheduler has its own lock, and taking `_lock` here would make saving
+        Settings wait out an in-flight poll for no reason.
+        """
+        if self._poll_rescheduler is None:
+            return None
+        minutes = self._poll_rescheduler()
+        self.db.add_event(
+            Stage.SYSTEM, Level.INFO, f"polling the mailbox every {minutes} min"
+        )
+        return minutes
 
     # --- one full cycle --------------------------------------------------
 
@@ -457,7 +484,7 @@ class AgentService:
         return {"pruned": len(pruned), "cutoff": cutoff}
 
     def _remove_label_files(self, label: Label) -> bool:
-        directory = storage.labels_root(self.config.data_dir) / str(label.id)
+        directory = storage.label_dir(self.config.data_dir, label.id)
         if not directory.is_dir() and not (label.original_path or label.print_path):
             return False
 

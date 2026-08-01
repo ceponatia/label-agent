@@ -72,7 +72,9 @@ def cmd_serve(args) -> int:
     try:
         uvicorn.run(create_app(db, config, service), host=host, port=port)
     finally:
-        scheduler.shutdown(wait=False)
+        # The jobs write to this database, so let an in-flight cycle land before
+        # the connection under it goes away.
+        scheduler.shutdown(wait=True)
         service.close()
         db.close()
     return 0

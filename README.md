@@ -74,9 +74,9 @@ which copies each PDF into `data/printed/` instead of printing. Useful for
 setting things up before the printer is ready.
 
 A few settings can also be changed from the web app's Settings page (poll
-interval, auto-print, printer name); those are stored in the database and win
-over `config.toml`. Changing the printer name takes effect when the service
-restarts.
+interval, auto-print, printer name); those are stored in the database, win
+over `config.toml`, and take effect straight away — the running service picks
+up a new printer and re-times its next mailbox check without a restart.
 
 ### Gmail app password
 

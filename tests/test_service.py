@@ -11,6 +11,7 @@ from labelagent.ingest import LAST_POLL_KEY
 from labelagent.models import LabelStatus, Level, Stage
 from labelagent.printing import JobStatus, PrinterUnavailable, FilePrinter
 from labelagent.scheduler import (
+    POLL_JOB_ID,
     PRUNE_INTERVAL_HOURS,
     RETRY_INTERVAL_MIN,
     build_scheduler,
@@ -21,6 +22,7 @@ from labelagent.service import (
     AGENT_STATE_KEY,
     AUTO_PRINT_KEY,
     JOB_PREFIX,
+    POLL_INTERVAL_KEY,
     AgentService,
     write_calibration_pdf,
 )
@@ -576,6 +578,65 @@ def test_the_poll_interval_can_be_overridden_in_settings(db, config, printer):
 
     db.set_setting("poll_interval_min", "not a number")
     assert poll_interval_min(service, config) == config.poll_interval_min
+
+
+def poll_job_minutes(scheduler) -> float:
+    """The interval the poll job is actually running on, in minutes."""
+    job = {j.id: j for j in scheduler.get_jobs()}[POLL_JOB_ID]
+    return job.trigger.interval.total_seconds() / 60
+
+
+def test_a_new_interval_retimes_the_poll_job_without_a_restart(db, config, printer):
+    """Saving an interval used to change a row and nothing else until a restart."""
+    service = make_service(db, config, printer)
+    scheduler = build_scheduler(service, config)
+    assert poll_job_minutes(scheduler) == config.poll_interval_min
+
+    db.set_setting(POLL_INTERVAL_KEY, "11")
+    assert service.reschedule_poll() == 11
+    assert poll_job_minutes(scheduler) == 11
+
+    messages = [event.message for event in db.list_events(stage=Stage.SYSTEM)]
+    assert any("every 11 min" in message for message in messages)
+
+
+def test_retiming_reuses_the_settings_fallbacks(db, config, printer):
+    service = make_service(db, config, printer)
+    scheduler = build_scheduler(service, config)
+
+    db.set_setting(POLL_INTERVAL_KEY, "0")  # clamped, never a hot loop
+    assert service.reschedule_poll() == 1
+    assert poll_job_minutes(scheduler) == 1
+
+    db.set_setting(POLL_INTERVAL_KEY, "not a number")
+    assert service.reschedule_poll() == config.poll_interval_min
+    assert poll_job_minutes(scheduler) == config.poll_interval_min
+
+
+def test_the_poll_job_is_retimed_while_the_scheduler_runs(db, config, printer):
+    """The case that matters: the timers are live when Settings is saved."""
+    service = make_service(db, config, printer)
+    scheduler = build_scheduler(service, config)
+    scheduler.start()
+    try:
+        db.set_setting(POLL_INTERVAL_KEY, "5")
+        assert service.reschedule_poll() == 5
+        assert poll_job_minutes(scheduler) == 5
+        # and it is scheduled to fire on the new interval, not the old one
+        job = scheduler.get_job(POLL_JOB_ID)
+        assert job.next_run_time is not None
+        assert (job.next_run_time - datetime.now(job.next_run_time.tzinfo)) <= timedelta(
+            minutes=5
+        )
+    finally:
+        scheduler.shutdown(wait=False)
+
+
+def test_rescheduling_without_a_scheduler_is_a_no_op(db, config, printer):
+    """`check-now` and the tests build a service with no timers behind it."""
+    service = make_service(db, config, printer)
+    assert service.reschedule_poll() is None
+    assert db.list_events(stage=Stage.SYSTEM) == []
 
 
 def test_retry_and_reap_recovers_a_stranded_label(db, config):

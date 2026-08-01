@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -335,6 +336,22 @@ def test_search_uids_uses_gmail_raw(imap_config):
             "SEARCH",
             "X-GM-RAW",
             '"(from:poshmark.com OR from:vinted.com) has:attachment '
+            '-label:label-agent/processed"',
+        )
+    ]
+
+
+def test_search_uids_escapes_a_quote_from_the_configured_domain(imap_config):
+    """A stray quote in config.toml must not close the query string early."""
+    config = replace(imap_config, poshmark_sender_domain='posh"mark.com')
+    client = StubClient({"SEARCH": ("OK", [b"101"])})
+
+    assert ImapFetcher(config, mailbox=StubMailbox(client)).search_uids() == ["101"]
+    assert client.calls == [
+        (
+            "SEARCH",
+            "X-GM-RAW",
+            '"(from:posh\\"mark.com OR from:vinted.com) has:attachment '
             '-label:label-agent/processed"',
         )
     ]

@@ -12,6 +12,7 @@ from labelagent.config import Config
 from labelagent.db import Database
 from labelagent.models import LabelStatus
 from labelagent.printing import FilePrinter
+from labelagent.scheduler import POLL_JOB_ID, build_scheduler
 from labelagent.service import AgentService
 from labelagent.web.app import create_app
 
@@ -231,6 +232,32 @@ def test_previews_and_pdfs_are_served_for_a_real_label(env):
         assert preview.status_code == 200
         assert preview.content[:4] == b"\x89PNG"
         assert client.get(f"/labels/{label.id}").status_code == 200
+
+
+def test_saving_the_interval_retimes_the_live_poll_job(env):
+    """Settings -> db -> the running scheduler, with no restart in between."""
+    service, db, config, _printer, _fetcher = env
+    scheduler = build_scheduler(service, config)
+    scheduler.start()
+
+    def poll_minutes() -> float:
+        return scheduler.get_job(POLL_JOB_ID).trigger.interval.total_seconds() / 60
+
+    try:
+        assert poll_minutes() == config.poll_interval_min
+
+        with TestClient(create_app(db, config, service)) as client:
+            response = client.post(
+                "/api/settings",
+                data={"poll_interval_min": "8"},
+                follow_redirects=False,
+            )
+            assert response.status_code == 303
+
+        assert db.get_setting("poll_interval_min") == "8"
+        assert poll_minutes() == 8
+    finally:
+        scheduler.shutdown(wait=False)
 
 
 def test_the_test_print_button_works_end_to_end(env):

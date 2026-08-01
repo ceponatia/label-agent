@@ -53,6 +53,7 @@ class IngestResult:
 def _save_attachment(db: Database, config: Config, label_id: int, c: EmailCandidate):
     filename, content = c.pdf_attachments[0]
     path = storage.original_pdf_path(config.data_dir, label_id)
+    storage.ensure_label_dir(config.data_dir, label_id)
     path.write_bytes(content)
     db.update_label(label_id, original_path=str(path))
     return filename, path
@@ -200,6 +201,17 @@ def _check(status: str, command: str) -> None:
         raise IngestError(f"IMAP {command} failed: {status}")
 
 
+def _imap_quoted(value: str) -> str:
+    """An IMAP quoted string, with the only two characters IMAP escapes escaped.
+
+    The whole Gmail query travels inside one of these, and the sender domains
+    spliced into it come from config.toml: an unescaped quote in there would
+    close the string early and hand the server a different search than the one
+    we meant.
+    """
+    return '"{}"'.format(value.replace("\\", "\\\\").replace('"', '\\"'))
+
+
 class ImapFetcher:
     """Gmail IMAP fetcher using Gmail's X-GM-RAW search and X-GM-LABELS."""
 
@@ -241,7 +253,9 @@ class ImapFetcher:
         )
 
     def search_uids(self) -> list[str]:
-        status, data = self.client.uid("SEARCH", "X-GM-RAW", f'"{self.search_query()}"')
+        status, data = self.client.uid(
+            "SEARCH", "X-GM-RAW", _imap_quoted(self.search_query())
+        )
         _check(status, "SEARCH")
         uids: list[str] = []
         for chunk in data or []:
