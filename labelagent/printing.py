@@ -1,14 +1,34 @@
+import json
 import os
 import re
 import shutil
 import subprocess
 import threading
+import time
+import uuid
 from enum import StrEnum
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 TIMEOUT = 10.0
+SUMATRA_TIMEOUT = 60.0
+WINDOWS_JOB_POLL_ATTEMPTS = 10
+WINDOWS_JOB_POLL_INTERVAL = 0.1
 REQUEST_ID_RE = re.compile(r"request id is (\S+)")
+IS_WINDOWS = os.name == "nt"
+DEFAULT_WINDOWS_PRINT_SETTINGS = (
+    "fit,simplex,paper=auto,bin=auto,disable-auto-rotation,ignore-pdf-print-settings"
+)
+WINDOWS_JOB_PREFIX = "win-"
+WINDOWS_COMPLETE_PREFIX = "win-complete-"
+WINDOWS_CANCELLED_RE = re.compile(r"cancell?ed|delet|abort", re.IGNORECASE)
+SUMATRA_ERRORS = {
+    2: "could not open the PDF",
+    3: "the PDF does not allow printing",
+    4: "the printer does not exist",
+    5: "the printer driver or device failed",
+    6: "printing is disabled by policy",
+}
 
 # `lpstat -l` labels the job-state-reasons line; IPP spells it "canceled", but
 # match both spellings so a differently-worded CUPS build cannot read as a
@@ -21,12 +41,12 @@ class JobStatus(StrEnum):
     PENDING = "pending"
     PRINTING = "printing"
     COMPLETED = "completed"
-    # Cancelled by a human or aborted by CUPS: the job is finished and nothing
-    # came out of the printer.
+    # Cancelled by a human or aborted by the print system: the job is finished
+    # and nothing came out of the printer.
     CANCELLED = "cancelled"
     FAILED = "failed"
-    # CUPS has never heard of this job - either it dropped out of the history
-    # or it never made it onto a queue. Only the caller knows which.
+    # The print system has no record of this job. Only the caller knows whether
+    # that means it aged out after printing or never reached a queue.
     UNKNOWN = "unknown"
     UNREACHABLE = "unreachable"
 
@@ -163,6 +183,218 @@ class CupsPrinter:
         return "" if found else None
 
 
+class WindowsPrinter:
+    """Windows print-spooler adapter using SumatraPDF for PDF rendering.
+
+    Sumatra's exit code tells us whether the document reached the Windows print
+    system. `Get-PrintJob` then lets us follow an observed spooler job. Windows
+    does not retain a completed-job history by default, so a job that we saw in
+    the queue and can no longer find is treated as completed. If a very fast job
+    disappears before we can observe its spooler id, Sumatra's successful handoff
+    is treated as immediate completion rather than risking a duplicate retry.
+    """
+
+    def __init__(
+        self,
+        printer_name: str,
+        sumatra_path: str = "",
+        print_settings: str = DEFAULT_WINDOWS_PRINT_SETTINGS,
+    ):
+        self.printer_name = printer_name
+        self.sumatra_path = find_sumatra(sumatra_path)
+        self.print_settings = print_settings or DEFAULT_WINDOWS_PRINT_SETTINGS
+
+    def submit(self, pdf_path: str) -> str:
+        source = Path(pdf_path)
+        if not source.is_file():
+            raise PrinterUnavailable(f"no such file: {source}")
+        if not self.sumatra_path or not Path(self.sumatra_path).is_file():
+            raise PrinterUnavailable(
+                "SumatraPDF not found; install it or set LABELAGENT_SUMATRA_PATH"
+            )
+
+        before = self._jobs()
+        if before is None:
+            raise PrinterUnavailable(
+                f"Windows print queue {self.printer_name!r} is unavailable"
+            )
+        before_ids = {self._job_id(job) for job in before}
+
+        cmd = [
+            self.sumatra_path,
+            "-silent",
+            "-print-to",
+            self.printer_name,
+            "-print-settings",
+            self.print_settings,
+            str(source),
+        ]
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=SUMATRA_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise PrinterUnavailable("SumatraPDF print command timed out") from exc
+        except OSError as exc:
+            raise PrinterUnavailable(f"could not start SumatraPDF: {exc}") from exc
+
+        if result.returncode != 0:
+            detail = SUMATRA_ERRORS.get(
+                result.returncode,
+                (result.stderr or result.stdout or "unknown SumatraPDF error").strip(),
+            )
+            raise PrinterUnavailable(
+                f"SumatraPDF print failed ({result.returncode}): {detail}"
+            )
+
+        # Sumatra uses the file name as the Windows print-job name. Give the
+        # spooler a short grace period to expose the new job after Sumatra exits.
+        for attempt in range(WINDOWS_JOB_POLL_ATTEMPTS):
+            jobs = self._jobs()
+            if jobs is None:
+                break
+            job = self._submitted_job(jobs, before_ids, source.name)
+            if job is not None:
+                return f"{WINDOWS_JOB_PREFIX}{self._job_id(job)}"
+            if attempt + 1 < WINDOWS_JOB_POLL_ATTEMPTS:
+                time.sleep(WINDOWS_JOB_POLL_INTERVAL)
+
+        # A small one-page label can leave the queue before PowerShell sees it.
+        # Sumatra returned success, so do not re-submit and risk a duplicate.
+        return f"{WINDOWS_COMPLETE_PREFIX}{uuid.uuid4().hex}"
+
+    def job_status(self, job_id: str) -> JobStatus:
+        if job_id.startswith(WINDOWS_COMPLETE_PREFIX):
+            return JobStatus.COMPLETED
+        if not job_id.startswith(WINDOWS_JOB_PREFIX):
+            return JobStatus.UNKNOWN
+        try:
+            native_id = int(job_id[len(WINDOWS_JOB_PREFIX) :])
+        except ValueError:
+            return JobStatus.UNKNOWN
+
+        jobs = self._jobs()
+        if jobs is None:
+            # We already observed this job in the Windows spooler at submit time.
+            # A transient PowerShell/spooler query failure must not make the
+            # service re-submit the label and risk a duplicate physical print.
+            return JobStatus.PENDING
+        job = next((j for j in jobs if self._job_id(j) == native_id), None)
+        if job is None:
+            # submit() only returns win-<id> after observing that exact spooler
+            # job, so absence later means it left the live Windows queue.
+            return JobStatus.COMPLETED
+
+        status = str(job.get("JobStatus") or "").strip().lower()
+        if WINDOWS_CANCELLED_RE.search(status):
+            return JobStatus.CANCELLED
+        if "printed" in status:
+            return JobStatus.COMPLETED
+        if "printing" in status:
+            return JobStatus.PRINTING
+
+        # Offline, out-of-paper, paused and error states intentionally stay
+        # pending while Windows owns the job. Re-submitting them could print a
+        # second label when the queue recovers.
+        return JobStatus.PENDING
+
+    def available(self) -> bool:
+        return bool(
+            self.sumatra_path
+            and Path(self.sumatra_path).is_file()
+            and self._jobs() is not None
+        )
+
+    def _jobs(self) -> list[dict] | None:
+        command = (
+            "$jobs = @(Get-PrintJob -PrinterName $env:LABELAGENT_WINDOWS_PRINTER "
+            "-ErrorAction Stop | Select-Object ID,DocumentName,"
+            "@{Name='JobStatus';Expression={$_.JobStatus.ToString()}}); "
+            "ConvertTo-Json -Compress -InputObject $jobs"
+        )
+        env = {**os.environ, "LABELAGENT_WINDOWS_PRINTER": self.printer_name}
+        try:
+            result = subprocess.run(
+                [
+                    "powershell.exe",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    command,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=TIMEOUT,
+                env=env,
+            )
+        except (subprocess.SubprocessError, OSError):
+            return None
+        if result.returncode != 0:
+            return None
+        try:
+            data = json.loads((result.stdout or "[]").strip() or "[]")
+        except (TypeError, ValueError):
+            return None
+        if isinstance(data, dict):
+            data = [data]
+        if not isinstance(data, list):
+            return None
+        return [job for job in data if isinstance(job, dict)]
+
+    @staticmethod
+    def _job_id(job: dict) -> int | None:
+        raw = job.get("ID", job.get("Id"))
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _submitted_job(
+        cls, jobs: list[dict], before_ids: set[int | None], filename: str
+    ) -> dict | None:
+        new_jobs = [job for job in jobs if cls._job_id(job) not in before_ids]
+        if not new_jobs:
+            return None
+        wanted = filename.casefold()
+        named = [
+            job
+            for job in new_jobs
+            if str(job.get("DocumentName") or "").casefold() == wanted
+        ]
+        if len(named) == 1:
+            return named[0]
+        if len(new_jobs) == 1:
+            return new_jobs[0]
+        return None
+
+
+def find_sumatra(explicit: str = "") -> str:
+    """Return an explicit or conventional SumatraPDF executable path."""
+    if explicit:
+        return str(Path(os.path.expandvars(explicit)).expanduser())
+
+    on_path = shutil.which("SumatraPDF.exe") or shutil.which("SumatraPDF")
+    if on_path:
+        return on_path
+
+    candidates: list[Path] = []
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        candidates.append(Path(local) / "SumatraPDF" / "SumatraPDF.exe")
+    for key in ("ProgramFiles", "ProgramFiles(x86)"):
+        root = os.environ.get(key)
+        if root:
+            candidates.append(Path(root) / "SumatraPDF" / "SumatraPDF.exe")
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate)
+    return ""
+
+
 class FilePrinter:
     """Dev/test printer: copies the PDF into out_dir instead of printing."""
 
@@ -195,6 +427,12 @@ class FilePrinter:
 def make_printer(config) -> Printer:
     if config.printer_name in ("", "file"):
         return FilePrinter(Path(config.data_dir) / "printed")
+    if IS_WINDOWS:
+        return WindowsPrinter(
+            config.printer_name,
+            getattr(config, "sumatra_path", ""),
+            getattr(config, "windows_print_settings", DEFAULT_WINDOWS_PRINT_SETTINGS),
+        )
     return CupsPrinter(
         config.printer_name, config.print_media, config.print_media_source
     )

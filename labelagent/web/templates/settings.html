@@ -24,9 +24,10 @@
     <label for="printer_name">Printer name</label>
     <input type="text" id="printer_name" name="printer_name" value="{{ printer_name }}"
            autocapitalize="off" autocorrect="off" spellcheck="false"
-           placeholder="e.g. Canon_TS9521">
-    <p class="help">The CUPS queue name (<code>lpstat -p</code>). Saved settings take effect
-       straight away &mdash; no restart.</p>
+           placeholder="e.g. Canon TS9500 series">
+    <p class="help">On Windows use the exact name from <code>Get-Printer</code>; on macOS/Linux use
+       the CUPS queue name from <code>lpstat -p</code>. Saved settings take effect straight away
+       &mdash; no restart.</p>
 
     <button class="btn primary" type="submit">Save settings</button>
   </form>

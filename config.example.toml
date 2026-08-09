@@ -34,15 +34,30 @@ poshmark_sender_domain = "poshmark.com"
 vinted_sender_domain = "vinted.com"
 
 # --- printing --------------------------------------------------------------
-# CUPS destination name (see `lpstat -p`). Leave empty (or "file") to use the
-# FilePrinter fake, which just copies PDFs into <data_dir>/printed/.
+# Printer destination name. Leave empty (or "file") to use the FilePrinter
+# fake, which just copies PDFs into <data_dir>/printed/.
+# On Windows use the exact name reported by `Get-Printer`.
+# On macOS/Linux use the CUPS destination reported by `lpstat -p`.
 # env: LABELAGENT_PRINTER
 printer_name = ""
 
-# CUPS media / tray options; discover real values with `lpoptions -l -d <name>`.
+# CUPS-only media / tray options; discover real values with
+# `lpoptions -p <name> -l`.
 # env: LABELAGENT_PRINT_MEDIA / LABELAGENT_PRINT_MEDIA_SOURCE
 print_media = "na_index-4x6_4x6in"
 print_media_source = "rear"
+
+# Windows uses SumatraPDF for unattended PDF rendering and the normal Windows
+# print spooler for queueing/status. Leave this blank to auto-detect a standard
+# per-user or system-wide SumatraPDF installation.
+# env: LABELAGENT_SUMATRA_PATH
+sumatra_path = ""
+
+# Windows-only SumatraPDF -print-settings value. The defaults derive the 4x6
+# paper size from the generated PDF, let the driver pick the matching tray,
+# preserve portrait orientation, fit inside printable margins, and force simplex.
+# env: LABELAGENT_WINDOWS_PRINT_SETTINGS
+windows_print_settings = "fit,simplex,paper=auto,bin=auto,disable-auto-rotation,ignore-pdf-print-settings"
 
 # Print ready labels without waiting for a tap in the web UI.
 # env: LABELAGENT_AUTO_PRINT

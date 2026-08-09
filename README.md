@@ -24,8 +24,10 @@ Background and design: [SCOPE.md](SCOPE.md) (what and why),
 4. The result is verified — page size, ink coverage, and a `pyzbar` decode of
    the tracking barcode, plus an optional vision check. A label that fails
    verification becomes `needs_review` and is never printed silently.
-5. Good labels are submitted to CUPS. If the printer is off, the label parks in
-   `waiting_for_printer` and is retried every two minutes until it comes back.
+5. Good labels are submitted to the host print system. On Windows, SumatraPDF
+   renders the PDF and the Windows spooler owns the job; on macOS/Linux, CUPS
+   owns it. If the printer is unavailable, the label remains visible rather
+   than being silently dropped or blindly duplicated.
 
 ## Quickstart
 
@@ -38,6 +40,10 @@ cp .env.example .env                   # Gmail app password, Anthropic key
 
 .venv/bin/python -m labelagent db-init
 ```
+
+On Windows PowerShell the Python path is `.venv\Scripts\python.exe`, and the
+copy commands are `Copy-Item config.example.toml config.toml` and
+`Copy-Item .env.example .env`.
 
 Try the pipeline on the two example labels without touching email or the
 printer:
@@ -104,6 +110,50 @@ The mailbox is opened read-only apart from one thing: processed messages get the
 Gmail label `label-agent/processed`, which is how a reinstall or a lost database
 still can't cause double prints. Nothing is ever marked read, moved or deleted.
 
+### Printer setup (Windows 11)
+
+Windows printing uses the normal Windows printer queue plus SumatraPDF for
+unattended PDF rendering. Adobe can still be the normal interactive PDF viewer;
+Sumatra exists here only as the automation engine.
+
+1. Add the printer under **Settings → Bluetooth & devices → Printers & scanners**
+   and make sure a normal Windows test page prints.
+2. Register the rear tray on the printer itself as **4×6** with the media type
+   that actually matches the label stock. Keep borderless printing off.
+3. Install SumatraPDF. A normal per-user or system-wide install is auto-detected;
+   otherwise set `sumatra_path` in `config.toml`.
+4. Get the exact Windows queue name:
+
+   ```powershell
+   Get-Printer | Select-Object Name
+   ```
+
+5. Put that exact name in `config.toml` (or save it on the web Settings page):
+
+   ```toml
+   printer_name = "Canon TS9500 series"
+   ```
+
+   The default Windows print settings use the generated PDF's 4×6 page size,
+   let the driver select the tray matching that size, force simplex, preserve
+   orientation, and fit inside the printable margins. They can be overridden
+   with `windows_print_settings` if a specific driver needs different values.
+6. Keep auto-print off at first and send the calibration page:
+
+   ```powershell
+   .\.venv\Scripts\python.exe -m labelagent test-print
+   ```
+
+   The same test is available from **Settings → Test print**. Confirm the 4×6
+   stock, tray, orientation and margins before enabling auto-print.
+
+Label Agent watches jobs it can see through `Get-PrintJob`. Windows normally
+removes completed jobs from the live queue, so a spooler job that Label Agent
+observed and later can no longer find is treated as completed. A very fast
+one-page job can disappear before its numeric spooler id is observed; in that
+case a successful SumatraPDF handoff is treated as complete rather than risking
+a duplicate retry.
+
 ### Printer setup (macOS)
 
 The Canon PIXMA TS9521Ta speaks AirPrint, which the CUPS built into macOS
@@ -152,7 +202,20 @@ either way.
 
 ## Running as a service
 
-### macOS (launchd) — the current host
+### Windows 11
+
+For initial testing, run Label Agent from PowerShell and leave the window open:
+
+```powershell
+.\.venv\Scripts\python.exe -m labelagent serve
+```
+
+The dashboard is at `http://127.0.0.1:8080` on the laptop. Other devices on the
+same trusted home network can use `http://<laptop-ip>:8080` while Windows
+Firewall allows private-network TCP port 8080. Do not expose this port to the
+internet; the web app intentionally has no login.
+
+### macOS (launchd)
 
 ```sh
 mkdir -p data/logs
@@ -169,7 +232,7 @@ launchctl unload ~/Library/LaunchAgents/com.snarebox.label-agent.plist  # stop
 sleep is fine: nothing prints while the lid is closed, and the next poll after
 wake catches up on everything that arrived meanwhile.
 
-### Linux (systemd) — the future home server
+### Linux (systemd)
 
 `deploy/systemd/label-agent.service`; edit `User`, `WorkingDirectory` and
 `ExecStart`, then `sudo systemctl enable --now label-agent`.
@@ -189,12 +252,11 @@ docker compose -f deploy/docker-compose.yml up -d --build
 Open the web app from any device on the home network:
 
 ```
-http://<laptop-name>.local:8080
+http://<laptop-ip>:8080
 ```
 
-`<laptop-name>` is what `scutil --get LocalHostName` prints on the host (e.g.
-`http://elaines-macbook.local:8080`). On an iPhone, Share → **Add to Home
-Screen** installs it as an icon; it is a PWA and behaves like an app.
+On an iPhone, Share → **Add to Home Screen** installs it as an icon; it is a PWA
+and behaves like an app.
 
 - **Dashboard** — running/paused, printer status, last check, today's counts,
   and anything needing attention with a one-tap Print.
@@ -252,6 +314,12 @@ their files however old they are, since they still have somewhere to go.
 
 ```sh
 .venv/bin/python -m pytest -q
+```
+
+On Windows:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
 ```
 
 The suite is offline and hermetic — no network, no real printer, no API key
