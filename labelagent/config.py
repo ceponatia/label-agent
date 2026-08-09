@@ -17,6 +17,10 @@ class Config:
     printer_name: str = ""
     print_media: str = "na_index-4x6_4x6in"
     print_media_source: str = "rear"
+    sumatra_path: str = ""
+    windows_print_settings: str = (
+        "fit,simplex,paper=auto,bin=auto,disable-auto-rotation,ignore-pdf-print-settings"
+    )
     auto_print: bool = True
     web_host: str = "0.0.0.0"
     web_port: int = 8080
@@ -43,6 +47,8 @@ FIELDS: dict[str, tuple[type, str]] = {
     "printer_name": (str, "LABELAGENT_PRINTER"),
     "print_media": (str, "LABELAGENT_PRINT_MEDIA"),
     "print_media_source": (str, "LABELAGENT_PRINT_MEDIA_SOURCE"),
+    "sumatra_path": (str, "LABELAGENT_SUMATRA_PATH"),
+    "windows_print_settings": (str, "LABELAGENT_WINDOWS_PRINT_SETTINGS"),
     "auto_print": (bool, "LABELAGENT_AUTO_PRINT"),
     "web_host": (str, "LABELAGENT_WEB_HOST"),
     "web_port": (int, "LABELAGENT_WEB_PORT"),
