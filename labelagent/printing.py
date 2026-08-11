@@ -289,10 +289,13 @@ class WindowsPrinter:
             return JobStatus.COMPLETED
 
         status = str(job.get("JobStatus") or "").strip().lower()
+        # Windows JobStatus is a set of flags. A successfully printed job can
+        # transiently be "Printed, Deleting" while the spooler removes it, so
+        # an explicit success flag must win over cleanup/cancellation flags.
+        if "printed" in status or "completed" in status:
+            return JobStatus.COMPLETED
         if WINDOWS_CANCELLED_RE.search(status):
             return JobStatus.CANCELLED
-        if "printed" in status:
-            return JobStatus.COMPLETED
         if "printing" in status:
             return JobStatus.PRINTING
 
