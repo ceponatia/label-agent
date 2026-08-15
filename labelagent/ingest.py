@@ -277,8 +277,27 @@ class ImapFetcher:
 
     # Fetcher protocol
 
-    def fetch_candidates(self) -> list[tuple[str, bytes]]:
+    def _fetch_candidates_once(self) -> list[tuple[str, bytes]]:
         return [(uid, self.fetch_raw(uid)) for uid in self.search_uids()]
+
+    def fetch_candidates(self) -> list[tuple[str, bytes]]:
+        """Fetch candidates, reconnecting once if a cached IMAP socket died.
+
+        Windows sleep can leave the process holding a TCP connection that Gmail
+        has already closed. The first command after wake then fails (commonly
+        WinError 10054). Reads are safe to repeat, so discard that connection,
+        log in fresh, and retry this fetch once before surfacing an error.
+        """
+        try:
+            return self._fetch_candidates_once()
+        except Exception:
+            try:
+                self.close()
+            except Exception:
+                # A dead socket can also make LOGOUT fail. close() clears the
+                # cached mailbox in its finally block, which is what matters.
+                pass
+            return self._fetch_candidates_once()
 
     def mark_processed(self, uid: str) -> None:
         status, _ = self.client.uid(
