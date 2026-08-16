@@ -512,6 +512,7 @@ class AgentService:
             return {
                 "checked": 0,
                 "filled": 0,
+                "problems": [],
                 "detail": (
                     "no Anthropic API key configured: the label PDFs are images, "
                     "so there is nothing that can read the buyer name off them"
@@ -526,6 +527,7 @@ class AgentService:
                 if not label.buyer_name
             ]
             filled = 0
+            problems: list[str] = []
             for label in candidates:
                 path = next(
                     (
@@ -536,20 +538,45 @@ class AgentService:
                     None,
                 )
                 if path is None:
+                    problems.append(f"label {label.id}: no pdf on disk to read")
                     continue
-                buyer = clean_person_name(read_ship_to_name(path, self.config))
-                if buyer:
-                    self.db.update_label(label.id, buyer_name=buyer)
-                    filled += 1
+                try:
+                    raw_name = read_ship_to_name(path, self.config)
+                except Exception as exc:
+                    problems.append(f"label {label.id}: vision call failed: {exc}")
+                    continue
+                if raw_name is None:
+                    problems.append(
+                        f"label {label.id}: the model could not read a name "
+                        "off the label"
+                    )
+                    continue
+                buyer = clean_person_name(raw_name)
+                if not buyer:
+                    problems.append(
+                        f"label {label.id}: read {raw_name!r} off the label, "
+                        "which does not look like a person's name"
+                    )
+                    continue
+                self.db.update_label(label.id, buyer_name=buyer)
+                filled += 1
             if filled:
                 self.db.add_event(
                     Stage.SYSTEM,
                     Level.INFO,
                     f"backfilled the buyer name on {filled} label(s) from their PDFs",
                 )
+            if problems:
+                self.db.add_event(
+                    Stage.SYSTEM,
+                    Level.WARN,
+                    "buyer-name backfill could not fill "
+                    f"{len(problems)} label(s): {'; '.join(problems)}",
+                )
         return {
             "checked": len(candidates),
             "filled": filled,
+            "problems": problems,
             "detail": (
                 f"{filled} of {len(candidates)} label(s) without a buyer name "
                 f"on {day} filled from their PDFs"

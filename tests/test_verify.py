@@ -271,16 +271,16 @@ def test_read_ship_to_name_without_key_never_calls_the_model(poshmark_print, mon
     assert verify_module.read_ship_to_name(poshmark_print, None) is None
 
 
-def test_read_ship_to_name_failure_degrades_to_none(poshmark_print, monkeypatch):
+def test_read_ship_to_name_failure_raises_so_the_backfill_can_report_it(
+    poshmark_print, monkeypatch
+):
     def exploding(png, config):
         raise RuntimeError("connection reset")
 
     monkeypatch.setattr(verify_module, "call_vision_api", exploding)
 
-    assert (
+    with pytest.raises(RuntimeError, match="connection reset"):
         verify_module.read_ship_to_name(poshmark_print, Config(anthropic_api_key="k"))
-        is None
-    )
 
 
 def test_parse_verdict_reads_fenced_json():

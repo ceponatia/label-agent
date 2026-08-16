@@ -244,10 +244,60 @@ def test_backfill_fills_existing_labels_without_printing(tmp_path, monkeypatch):
 
         assert result["checked"] == 1
         assert result["filled"] == 1
+        assert result["problems"] == []
         label = db.get_label(1)
         assert label.buyer_name == "Amy Buyer"
         assert label.status == LabelStatus.PRINTED
         assert list((tmp_path / "printed").glob("*")) == []
+    finally:
+        db.close()
+
+
+def test_backfill_reports_why_each_label_was_not_filled(tmp_path, monkeypatch):
+    """"0 of 5 filled" with no reasons is undebuggable; every miss must say why."""
+    from labelagent import verify as verify_module
+    from labelagent.printing import FilePrinter
+    from labelagent.service import AgentService
+
+    config = Config(
+        data_dir=str(tmp_path / "data"),
+        db_path=str(tmp_path / "test.db"),
+        anthropic_api_key="k",
+    )
+    db = _database(tmp_path)
+    pdf = tmp_path / "print.pdf"
+    doc = fitz.open()
+    doc.new_page(width=288, height=432)
+    doc.save(str(pdf))
+    doc.close()
+    db.insert_label(
+        Label(gmail_message_id="miss-1", status=LabelStatus.PRINTED)
+    )
+    db.insert_label(
+        Label(gmail_message_id="miss-2", status=LabelStatus.PRINTED, print_path=str(pdf))
+    )
+
+    def exploding(png, config):
+        raise RuntimeError("invalid x-api-key")
+
+    monkeypatch.setattr(verify_module, "call_vision_api", exploding)
+    service = AgentService(
+        db,
+        config,
+        printer=FilePrinter(tmp_path / "printed"),
+        fetcher_factory=lambda cfg: FakeFetcher([]),
+    )
+    try:
+        result = service.backfill_buyer_names()
+
+        assert result["filled"] == 0
+        assert result["checked"] == 2
+        assert sorted(result["problems"]) == [
+            "label 1: no pdf on disk to read",
+            "label 2: vision call failed: invalid x-api-key",
+        ]
+        warnings = db.list_events(level=Level.WARN)
+        assert any("buyer-name backfill" in event.message for event in warnings)
     finally:
         db.close()
 

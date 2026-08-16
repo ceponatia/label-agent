@@ -130,18 +130,17 @@ def read_ship_to_name(pdf_path: str | Path, config: Config | None) -> str | None
 
     Used to backfill buyer names on labels that were ingested before the name
     was captured. Returns None without an API key (raster labels have no text
-    layer to fall back to) and on any failure - this is metadata, never worth
-    an error.
+    layer to fall back to) and when the model reads nothing. A failing vision
+    call raises: the backfill exists to answer "why is the buyer missing?",
+    and swallowing the API error here once left it reporting "0 filled" with
+    no way to tell a dead API key from an unreadable label.
     """
     if config is None or not config.anthropic_api_key:
         return None
-    try:
-        with fitz.open(str(pdf_path)) as doc:
-            if doc.page_count == 0:
-                return None
-            verdict = call_vision_api(_render_preview_png(doc[0]), config)
-    except Exception:
-        return None
+    with fitz.open(str(pdf_path)) as doc:
+        if doc.page_count == 0:
+            return None
+        verdict = call_vision_api(_render_preview_png(doc[0]), config)
     return _vision_ship_to_name(verdict)
 
 
