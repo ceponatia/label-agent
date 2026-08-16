@@ -1,34 +1,23 @@
 {% extends "layout.html" %}
-{% import "macros.html" as m %}
 {% block title %}Dashboard &middot; Label Agent{% endblock %}
 
 {% block content %}
+{# Two timers, because the two halves want different cadences. The status
+   fields and counts are read-only and cheap, so they refresh briskly. The
+   label lists carry the per-row Print buttons and the results of tapping
+   them, and replacing those every few seconds would snatch the message away
+   before it could be read - so they refresh at a calmer pace. #}
+<div hidden aria-hidden="true"
+     hx-get="/api/dashboard/live" hx-trigger="every 3s" hx-swap="none"></div>
+<div hidden aria-hidden="true"
+     hx-get="/api/dashboard/labels" hx-trigger="every 15s" hx-swap="none"></div>
+
 {% include "fragments/status_card.html" %}
+
+{# Outside every refreshing region, so what an action reports stays put. #}
+<div id="check-result" class="check-result" role="status" aria-live="polite"></div>
+
 {% include "fragments/today_counts.html" %}
-
-<section class="card">
-  <h2>Needs attention</h2>
-  {% if attention %}
-    <ul class="list">
-      {% for label in attention %}
-        {{ m.label_row(label, 'Print anyway' if label.status == 'duplicate' else 'Print') }}
-      {% endfor %}
-    </ul>
-  {% else %}
-    <p class="empty">Nothing waiting. Everything printed or in flight.</p>
-  {% endif %}
-</section>
-
-<section class="card">
-  <h2>Today's labels</h2>
-  {% if recent %}
-    <ul class="list">
-      {% for label in recent %}
-        {{ m.label_row(label, 'Reprint' if label.status == 'printed' else 'Print') }}
-      {% endfor %}
-    </ul>
-  {% else %}
-    <p class="empty">No labels yet today.</p>
-  {% endif %}
-</section>
+{% include "fragments/attention_list.html" %}
+{% include "fragments/today_list.html" %}
 {% endblock %}

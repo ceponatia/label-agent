@@ -1,0 +1,13 @@
+{% import "macros.html" as m %}
+<section class="card" id="today-list"{% if oob %} hx-swap-oob="outerHTML"{% endif %}>
+  <h2>Today's labels</h2>
+  {% if recent %}
+    <ul class="list">
+      {% for label in recent %}
+        {{ m.label_row(label, 'Reprint' if label.status == 'printed' else 'Print', 'today') }}
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="empty">No labels yet today.</p>
+  {% endif %}
+</section>

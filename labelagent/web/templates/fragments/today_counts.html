@@ -1,6 +1,4 @@
-<section class="chips" id="today-counts" aria-label="Today"
-         hx-get="/api/dashboard/counts" hx-trigger="every 3s"
-         hx-target="#today-counts" hx-swap="outerHTML">
+<section class="chips" id="today-counts" aria-label="Today"{% if oob %} hx-swap-oob="outerHTML"{% endif %}>
   <a class="chip" href="/history">
     <span class="n">{{ counts.printed }}</span><span class="l">printed today</span>
   </a>
