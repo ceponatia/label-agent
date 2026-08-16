@@ -1,9 +1,10 @@
 """Gmail polling: fetch candidate emails, classify them, record label rows.
 
-The IMAP mailbox is read-only apart from adding the `label-agent/processed`
-Gmail label; nothing is ever marked seen, moved or deleted. A message is only
-marked processed once its row and its PDF are durably on disk, so a crash
-re-fetches rather than loses a label.
+After a message is safely handled, the agent applies the
+`label-agent/processed` Gmail label and archives it by removing Gmail's Inbox
+label. The processed label is created automatically when needed. A message is
+only finalized once its row and PDF are durably on disk, so a crash re-fetches
+rather than loses a label.
 """
 
 from __future__ import annotations
@@ -91,6 +92,21 @@ def _duplicate_of(db: Database, tracking: str | None) -> Label | None:
         if existing.status != LabelStatus.DUPLICATE:
             return existing
     return None
+
+
+def _finish_message(fetcher: Fetcher, uid: str) -> None:
+    """Finalize a safely handled message, with Gmail archiving when supported.
+
+    Test/alternate fetchers only implement ``mark_processed`` and keep the old
+    behavior. The Gmail fetcher exposes ``finalize_processed`` so its custom
+    label creation, processed-label write, Inbox removal, and rollback stay in
+    one place.
+    """
+    finalize = getattr(fetcher, "finalize_processed", None)
+    if finalize is not None:
+        finalize(uid)
+    else:
+        fetcher.mark_processed(uid)
 
 
 def is_poshmark_label_delay(c: EmailCandidate) -> bool:
@@ -185,12 +201,12 @@ def _process_message(
             "is temporarily delayed. No action is needed; Poshmark says it will email "
             f"the prepaid label automatically when service is available again. Sale email: {subject}",
         )
-        fetcher.mark_processed(uid)
+        _finish_message(fetcher, uid)
         return
 
     if not is_candidate(c, config):
         result.skipped += 1
-        fetcher.mark_processed(uid)
+        _finish_message(fetcher, uid)
         return
 
     classification = classify_email(c, config)
@@ -202,7 +218,7 @@ def _process_message(
             f"not a label email ({classification.source}, "
             f"confidence {classification.confidence:.2f}): {c.subject}",
         )
-        fetcher.mark_processed(uid)
+        _finish_message(fetcher, uid)
         return
 
     existing = db.find_by_gmail_message_id(c.message_id) if c.message_id else None
@@ -225,7 +241,7 @@ def _process_message(
             result.new_labels.append(existing.id)
         else:
             result.skipped += 1
-        fetcher.mark_processed(uid)
+        _finish_message(fetcher, uid)
         return
 
     duplicate = _duplicate_of(db, classification.tracking_number)
@@ -278,7 +294,7 @@ def _process_message(
             label.id,
         )
 
-    fetcher.mark_processed(uid)
+    _finish_message(fetcher, uid)
 
 
 def poll_once(db: Database, config: Config, fetcher: Fetcher) -> IngestResult:
@@ -324,12 +340,31 @@ def _imap_quoted(value: str) -> str:
     return '"{}"'.format(value.replace("\\", "\\\\").replace('"', '\\"'))
 
 
+def _response_text(data) -> str:
+    parts: list[str] = []
+    for item in data or []:
+        if isinstance(item, bytes):
+            parts.append(item.decode("utf-8", errors="replace"))
+        else:
+            parts.append(str(item))
+    return " ".join(parts)
+
+
+def _label_already_exists(data) -> bool:
+    text = _response_text(data).upper()
+    return any(
+        marker in text
+        for marker in ("ALREADYEXISTS", "ALREADY EXISTS", "DUPLICATE FOLDER", "DUPLICATE MAILBOX")
+    )
+
+
 class ImapFetcher:
     """Gmail IMAP fetcher using Gmail's X-GM-RAW search and X-GM-LABELS."""
 
     def __init__(self, config: Config, mailbox=None):
         self.config = config
         self._mailbox = mailbox
+        self._processed_label_ready = False
 
     # connection
 
@@ -417,11 +452,62 @@ class ImapFetcher:
                 pass
             return self._fetch_candidates_once()
 
+    def ensure_processed_label(self) -> None:
+        """Create Label Agent's Gmail label once, accepting an existing label."""
+        if self._processed_label_ready:
+            return
+        create = getattr(self.client, "create", None)
+        if create is None:
+            # Small test doubles and alternate IMAP clients may not expose
+            # CREATE. STORE remains backward-compatible with the old fetcher.
+            return
+        status, data = create(PROCESSED_LABEL)
+        if status != "OK" and not _label_already_exists(data):
+            raise IngestError(
+                f"IMAP CREATE failed: {status}: {_response_text(data) or 'no detail'}"
+            )
+        self._processed_label_ready = True
+
     def mark_processed(self, uid: str) -> None:
         status, _ = self.client.uid(
             "STORE", str(uid), "+X-GM-LABELS", f"({PROCESSED_LABEL})"
         )
         _check(status, "STORE")
+
+    def unmark_processed(self, uid: str) -> None:
+        status, _ = self.client.uid(
+            "STORE", str(uid), "-X-GM-LABELS", f"({PROCESSED_LABEL})"
+        )
+        _check(status, "STORE")
+
+    def archive_processed(self, uid: str) -> None:
+        # In Gmail, archiving is removing the system \Inbox label; the message
+        # remains in All Mail and under label-agent/processed.
+        status, _ = self.client.uid(
+            "STORE", str(uid), "-X-GM-LABELS", r"(\Inbox)"
+        )
+        _check(status, "STORE")
+
+    def finalize_processed(self, uid: str) -> None:
+        """Label and archive a safely handled message without stranding it.
+
+        The processed label is added before Inbox is removed. If archiving
+        fails, remove our processed label again so the Gmail search will retry
+        the message on the next poll instead of silently leaving it in Inbox.
+        """
+        self.ensure_processed_label()
+        self.mark_processed(uid)
+        try:
+            self.archive_processed(uid)
+        except Exception as archive_error:
+            try:
+                self.unmark_processed(uid)
+            except Exception as rollback_error:
+                raise IngestError(
+                    f"could not archive processed message {uid}: {archive_error}; "
+                    f"could not roll back {PROCESSED_LABEL}: {rollback_error}"
+                ) from archive_error
+            raise
 
 
 def make_fetcher(config: Config) -> Fetcher:
