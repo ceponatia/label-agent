@@ -30,6 +30,7 @@
     {{ thumb(label) }}
     <span class="row-text">
       <span class="row-title">{{ label.item_title or 'Untitled label' }}</span>
+      {% if label.buyer_name %}<span class="row-detail">Buyer: {{ label.buyer_name }}</span>{% endif %}
       <span class="row-meta">
         {{ platform_badge(label.platform) }}
         {{ status_badge(label.status) }}

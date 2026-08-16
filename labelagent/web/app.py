@@ -360,6 +360,12 @@ def create_app(db: Database, config: Config, controller: AgentController) -> Fas
 
     # --- agent API ------------------------------------------------------
 
+    @app.get("/api/dashboard/counts")
+    def api_dashboard_counts(request: Request) -> Response:
+        return templates.TemplateResponse(
+            request, "fragments/today_counts.html", {"counts": today_counts()}
+        )
+
     @app.get("/api/status")
     def api_status() -> dict:
         return {**controller.state(), "today": today_counts()}

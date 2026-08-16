@@ -40,6 +40,7 @@ class Label:
     id: int | None = None
     platform: str = Platform.POSHMARK
     item_title: str | None = None
+    buyer_name: str | None = None
     order_ref: str | None = None
     tracking_number: str | None = None
     ship_by: str | None = None
