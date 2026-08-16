@@ -8,7 +8,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 
-import fitz
+import pymupdf as fitz
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles

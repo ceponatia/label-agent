@@ -6,7 +6,7 @@ Pure functions: no database access, no network, no LLM.
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import fitz
+import pymupdf as fitz
 
 TARGET_WIDTH = 288.0
 TARGET_HEIGHT = 432.0

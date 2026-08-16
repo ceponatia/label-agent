@@ -1,7 +1,7 @@
 import re
 from pathlib import Path
 
-import fitz
+import pymupdf as fitz
 import pytest
 
 from labelagent.pipeline import (
