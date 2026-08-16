@@ -104,6 +104,19 @@ def cmd_check_now(args) -> int:
     return 1 if summary["errors"] else 0
 
 
+def cmd_backfill_buyers(args) -> int:
+    config = load_config(args.config)
+    db = Database(config.db_path)
+    db.init()
+    service = AgentService(db, config)
+    try:
+        result = service.backfill_buyer_names(day=args.date)
+    finally:
+        db.close()
+    print(result["detail"])
+    return 0
+
+
 def cmd_test_print(args) -> int:
     config = load_config(args.config)
     db = Database(config.db_path)
@@ -142,6 +155,16 @@ def _add_test_print(sub):
     return sub.add_parser("test-print", help="print a 4x6 calibration page")
 
 
+def _add_backfill_buyers(sub):
+    p = sub.add_parser(
+        "backfill-buyers",
+        help="fill missing buyer names for a day's labels by re-reading "
+        "their PDFs; prints nothing",
+    )
+    p.add_argument("--date", help="day to backfill as YYYY-MM-DD (default today)")
+    return p
+
+
 def _add_db_init(sub):
     return sub.add_parser("db-init", help="create the data dir and SQLite schema")
 
@@ -151,6 +174,7 @@ COMMANDS = {
     "serve": (_add_serve, cmd_serve),
     "check-now": (_add_check_now, cmd_check_now),
     "test-print": (_add_test_print, cmd_test_print),
+    "backfill-buyers": (_add_backfill_buyers, cmd_backfill_buyers),
     "db-init": (_add_db_init, cmd_db_init),
 }
 

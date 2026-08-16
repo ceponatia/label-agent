@@ -29,8 +29,12 @@
   <a class="row-main" href="/labels/{{ label.id }}">
     {{ thumb(label) }}
     <span class="row-text">
-      <span class="row-title">{{ label.item_title or 'Untitled label' }}</span>
-      {% if label.buyer_name %}<span class="row-detail">Buyer: {{ label.buyer_name }}</span>{% endif %}
+      {% if label.buyer_name %}
+        <span class="row-title">{{ label.buyer_name }}:</span>
+        <span class="row-item">{{ label.item_title or 'Untitled label' }}</span>
+      {% else %}
+        <span class="row-title">{{ label.item_title or 'Untitled label' }}</span>
+      {% endif %}
       <span class="row-meta">
         {{ platform_badge(label.platform) }}
         {{ status_badge(label.status) }}

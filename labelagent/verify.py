@@ -34,10 +34,12 @@ VISION_PROMPT = """This image is a USPS shipping label prepared for printing on 
 
 Check that it is complete and printable: the tracking barcode is fully visible and uncut, the ship-to address is complete, and the postage block is present. Ignore small white margins.
 
-Reply with strict JSON only, no prose and no code fences:
-{"ok": true or false, "problems": ["short description", ...]}
+Also read the recipient's name from the ship-to (delivery) address block: it is the first line of that address, above the street line. Do not use the sender/return address.
 
-Use an empty problems list when ok is true."""
+Reply with strict JSON only, no prose and no code fences:
+{"ok": true or false, "problems": ["short description", ...], "ship_to_name": "recipient name exactly as printed" or null}
+
+Use an empty problems list when ok is true, and null for ship_to_name when it cannot be read."""
 
 
 @dataclass
@@ -47,6 +49,10 @@ class VerifyResult:
     barcodes: list[str]
     source: str  # "deterministic" | "deterministic+llm"
     warnings: list[str] = field(default_factory=list)
+    # Recipient name read off the label by the vision check, when it ran. The
+    # label is the only place Vinted prints the buyer's real name, and the real
+    # label PDFs are raster images, so vision is the only reader we have.
+    ship_to_name: str | None = None
 
 
 def verify_print_pdf(
@@ -59,6 +65,7 @@ def verify_print_pdf(
     warnings: list[str] = []
     barcodes: list[str] = []
     source = "deterministic"
+    ship_to_name: str | None = None
 
     try:
         doc = fitz.open(pdf_path)
@@ -109,10 +116,33 @@ def verify_print_pdf(
                 verdict = call_vision_api(_render_preview_png(page), config)
                 source = "deterministic+llm"
                 problems.extend(_vision_problems(verdict))
+                ship_to_name = _vision_ship_to_name(verdict)
             except Exception:
                 pass
 
-    return VerifyResult(not problems, problems, barcodes, source, warnings)
+    return VerifyResult(
+        not problems, problems, barcodes, source, warnings, ship_to_name
+    )
+
+
+def read_ship_to_name(pdf_path: str | Path, config: Config | None) -> str | None:
+    """Read just the recipient name off a label PDF via the vision model.
+
+    Used to backfill buyer names on labels that were ingested before the name
+    was captured. Returns None without an API key (raster labels have no text
+    layer to fall back to) and on any failure - this is metadata, never worth
+    an error.
+    """
+    if config is None or not config.anthropic_api_key:
+        return None
+    try:
+        with fitz.open(str(pdf_path)) as doc:
+            if doc.page_count == 0:
+                return None
+            verdict = call_vision_api(_render_preview_png(doc[0]), config)
+    except Exception:
+        return None
+    return _vision_ship_to_name(verdict)
 
 
 def decode_barcodes(image) -> list[str]:
@@ -162,6 +192,14 @@ def parse_verdict(text: str) -> dict:
     if not isinstance(verdict, dict):
         raise ValueError("model reply is not a JSON object")
     return verdict
+
+
+def _vision_ship_to_name(verdict: dict) -> str | None:
+    """The recipient name from a vision verdict, or None for anything unusable."""
+    name = verdict.get("ship_to_name")
+    if not isinstance(name, str) or not name.strip():
+        return None
+    return name.strip()
 
 
 def _vision_problems(verdict: dict) -> list[str]:
