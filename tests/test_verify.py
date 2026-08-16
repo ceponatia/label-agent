@@ -271,15 +271,107 @@ def test_read_ship_to_name_without_key_never_calls_the_model(poshmark_print, mon
     assert verify_module.read_ship_to_name(poshmark_print, None) is None
 
 
-def test_read_ship_to_name_failure_degrades_to_none(poshmark_print, monkeypatch):
+def test_read_ship_to_name_failure_raises_so_the_backfill_can_report_it(
+    poshmark_print, monkeypatch
+):
     def exploding(png, config):
         raise RuntimeError("connection reset")
 
     monkeypatch.setattr(verify_module, "call_vision_api", exploding)
 
-    assert (
+    with pytest.raises(RuntimeError, match="connection reset"):
         verify_module.read_ship_to_name(poshmark_print, Config(anthropic_api_key="k"))
-        is None
+
+
+class FakeReplicate:
+    """Stands in for the replicate module: records the call, returns a reply."""
+
+    def __init__(self, reply):
+        self.reply = reply
+        self.token = None
+        self.model = None
+        self.input = None
+
+    def Client(self, api_token=None):  # noqa: N802 - mirrors replicate.Client
+        self.token = api_token
+        return self
+
+    def run(self, model, input):  # noqa: A002 - mirrors replicate.run's signature
+        self.model = model
+        self.input = input
+        return self.reply
+
+
+def replicate_config(**overrides):
+    return Config(
+        vision_provider="replicate", replicate_api_token="r8_test", **overrides
+    )
+
+
+def test_anthropic_stays_the_default_provider():
+    assert verify_module.vision_provider(Config()) == "anthropic"
+    assert verify_module.vision_model(Config()) == "claude-haiku-4-5"
+    assert verify_module.vision_available(Config(anthropic_api_key="k")) is True
+    assert verify_module.vision_available(Config()) is False
+    assert verify_module.vision_available(None) is False
+
+
+def test_replicate_provider_needs_its_own_token():
+    assert verify_module.vision_available(Config(vision_provider="replicate")) is False
+    assert verify_module.vision_available(replicate_config()) is True
+    # An Anthropic key does not make the Replicate path usable.
+    assert (
+        verify_module.vision_available(
+            Config(vision_provider="replicate", anthropic_api_key="k")
+        )
+        is False
+    )
+
+
+def test_replicate_sends_the_label_and_parses_the_reply(poshmark_print, monkeypatch):
+    fake = FakeReplicate('{"ok": true, "problems": [], "ship_to_name": "Dana Newman"}')
+    monkeypatch.setitem(__import__("sys").modules, "replicate", fake)
+
+    result = verify_print_pdf(poshmark_print, config=replicate_config())
+
+    assert result.ok
+    assert result.ship_to_name == "Dana Newman"
+    assert result.source == "deterministic+llm"
+    assert fake.token == "r8_test"
+    assert fake.model == "google/gemini-3-flash"
+    assert fake.input["images"][0].startswith("data:image/png;base64,")
+
+
+def test_replicate_joins_a_chunked_reply(poshmark_print, monkeypatch):
+    """Replicate hands some models' text back as a list of chunks."""
+    fake = FakeReplicate(['{"ok": true, "problems": [], ', '"ship_to_name": "Ann Lee"}'])
+    monkeypatch.setitem(__import__("sys").modules, "replicate", fake)
+
+    assert verify_print_pdf(poshmark_print, config=replicate_config()).ship_to_name == (
+        "Ann Lee"
+    )
+
+
+def test_replicate_claude_gets_the_full_resolution_image(poshmark_print, monkeypatch):
+    """Replicate's Claude wrapper downsizes to 0.5 MP unless told otherwise."""
+    fake = FakeReplicate('{"ok": true, "problems": [], "ship_to_name": null}')
+    monkeypatch.setitem(__import__("sys").modules, "replicate", fake)
+
+    verify_print_pdf(
+        poshmark_print,
+        config=replicate_config(vision_model="anthropic/claude-4.5-haiku"),
+    )
+
+    assert fake.input["max_image_resolution"] == 2
+    assert fake.input["image"].startswith("data:image/png;base64,")
+    assert "images" not in fake.input
+
+
+def test_a_configured_vision_model_wins_over_the_default():
+    assert verify_module.vision_model(replicate_config()) == "google/gemini-3-flash"
+    assert (
+        verify_module.vision_model(replicate_config(vision_model="qwen/qwen3-7-plus"))
+        == "qwen/qwen3-7-plus"
     )
 
 

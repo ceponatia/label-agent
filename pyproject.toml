@@ -17,6 +17,7 @@ dependencies = [
     "jinja2",
     "apscheduler",
     "anthropic",
+    "replicate",
     "python-dotenv",
     "pyzbar",
     "pillow",

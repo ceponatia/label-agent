@@ -15,16 +15,26 @@
 {% endif %}
 {%- endmacro %}
 
-{% macro print_button(label, text='Print') -%}
-<button class="btn small"
-        hx-post="/api/labels/{{ label.id }}/print"
-        hx-target="#result-{{ label.id }}"
-        hx-swap="innerHTML"
-        hx-indicator="#result-{{ label.id }}">{{ text }}</button>
-<span class="result" id="result-{{ label.id }}"></span>
+{# `scope` names the list this row sits in. The dashboard shows one label in
+   both "Needs attention" and "Today's labels", so an id built from the label
+   alone appears twice in the page and htmx writes the print result into
+   whichever copy it finds first - sometimes the row in the other section,
+   leaving the tapped button looking like it did nothing. #}
+{% macro result_id(label, scope) -%}
+result-{{ scope ~ '-' if scope }}{{ label.id }}
 {%- endmacro %}
 
-{% macro label_row(label, action_text='Print') -%}
+{% macro print_button(label, text='Print', scope='') -%}
+{% set target = '#' ~ result_id(label, scope) %}
+<button class="btn small"
+        hx-post="/api/labels/{{ label.id }}/print"
+        hx-target="{{ target }}"
+        hx-swap="innerHTML"
+        hx-indicator="{{ target }}">{{ text }}</button>
+<span class="result" id="{{ result_id(label, scope) }}"></span>
+{%- endmacro %}
+
+{% macro label_row(label, action_text='Print', scope='') -%}
 <li class="row">
   <a class="row-main" href="/labels/{{ label.id }}">
     {{ thumb(label) }}
@@ -33,7 +43,9 @@
         <span class="row-title">{{ label.buyer_name }}:</span>
         <span class="row-item">{{ label.item_title or 'Untitled label' }}</span>
       {% else %}
-        <span class="row-title">{{ label.item_title or 'Untitled label' }}</span>
+        {# No buyer read off the label yet: the item leads, and still wraps
+           rather than being cut off mid-word. #}
+        <span class="row-item row-item-lead">{{ label.item_title or 'Untitled label' }}</span>
       {% endif %}
       <span class="row-meta">
         {{ platform_badge(label.platform) }}
@@ -43,6 +55,6 @@
       {% if label.status_detail %}<span class="row-detail">{{ label.status_detail }}</span>{% endif %}
     </span>
   </a>
-  <span class="row-actions">{{ print_button(label, action_text) }}</span>
+  <span class="row-actions">{{ print_button(label, action_text, scope) }}</span>
 </li>
 {%- endmacro %}

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import shutil
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -24,7 +25,7 @@ from .ingest import LAST_POLL_KEY, Fetcher, clean_person_name, make_fetcher, pol
 from .models import Label, LabelStatus, Level, Stage
 from .pipeline import TARGET_HEIGHT, TARGET_WIDTH, process_label_pdf
 from .printing import JobStatus, Printer, PrinterUnavailable, make_printer
-from .verify import read_ship_to_name, verify_print_pdf
+from .verify import read_ship_to_name, verify_print_pdf, vision_available
 
 AGENT_STATE_KEY = "agent_state"
 AUTO_PRINT_KEY = "auto_print"
@@ -51,6 +52,14 @@ PRUNABLE = (LabelStatus.PRINTED, LabelStatus.FAILED, LabelStatus.DUPLICATE)
 # list_labels() returns newest first, so a small limit would hide exactly the
 # rows pruning cares about.
 PRUNE_LIMIT = 100_000
+
+# Asking the printer whether it is up shells out - `lpstat` under CUPS, a
+# PowerShell query on Windows - and the dashboard now re-reads state() every few
+# seconds, which would spawn one of those subprocesses on every poll. The
+# indicator does not need sub-minute resolution, so state() may reuse a recent
+# answer. printer_available() itself stays uncached: retry_waiting() decides
+# whether to send a parcel's label on it, and that must never act on a stale yes.
+PRINTER_STATE_TTL_SEC = 20.0
 
 TEST_PRINT_FILENAME = "test-print.pdf"
 CALIBRATION_TITLE = "label-agent calibration 4×6"
@@ -89,6 +98,8 @@ class AgentService:
         )
         self.fetcher_factory = fetcher_factory or make_fetcher
         self._fetcher = None
+        # Last (monotonic time, answer) from the printer; see PRINTER_STATE_TTL_SEC.
+        self._printer_check: tuple[float, bool] | None = None
         # Set by whoever owns the timers; see set_poll_rescheduler.
         self._poll_rescheduler: Callable[[], int] | None = None
         # The scheduler and the web app both drive this object; one cycle at a
@@ -113,16 +124,26 @@ class AgentService:
         return getattr(self.printer, "printer_name", "") or "file printer"
 
     def printer_available(self) -> bool:
+        """Ask the printer, now. Callers that decide whether to print use this."""
         try:
-            return bool(self.printer.available())
+            answer = bool(self.printer.available())
         except Exception:
-            return False
+            answer = False
+        self._printer_check = (time.monotonic(), answer)
+        return answer
+
+    def _printer_available_for_display(self) -> bool:
+        """The dashboard's view of the printer, from a recent answer if there is one."""
+        recent = self._printer_check
+        if recent is not None and time.monotonic() - recent[0] < PRINTER_STATE_TTL_SEC:
+            return recent[1]
+        return self.printer_available()
 
     def state(self) -> dict:
         return {
             "agent_state": self.agent_state(),
             "auto_print": self.auto_print(),
-            "printer_available": self.printer_available(),
+            "printer_available": self._printer_available_for_display(),
             "printer_name": self.printer_name(),
             "last_poll_at": self.db.get_setting(LAST_POLL_KEY),
         }
@@ -154,6 +175,8 @@ class AgentService:
         with self._lock:
             self.db.set_setting(PRINTER_NAME_KEY, name)
             self.printer = make_printer(replace(self.config, printer_name=name))
+            # Whatever the old queue last said has nothing to do with this one.
+            self._printer_check = None
         self.db.add_event(
             Stage.SYSTEM, Level.INFO, f"printer set to {name or 'file printer'}"
         )
@@ -508,13 +531,16 @@ class AgentService:
         an API key the raster label PDFs cannot be read at all, so say so
         instead of quietly doing nothing.
         """
-        if not self.config.anthropic_api_key:
+        if not vision_available(self.config):
             return {
                 "checked": 0,
                 "filled": 0,
+                "problems": [],
                 "detail": (
-                    "no Anthropic API key configured: the label PDFs are images, "
-                    "so there is nothing that can read the buyer name off them"
+                    "no vision provider configured: the label PDFs are images, so "
+                    "there is nothing that can read the buyer name off them. Set "
+                    "ANTHROPIC_API_KEY, or REPLICATE_API_TOKEN with "
+                    "vision_provider = \"replicate\""
                 ),
             }
 
@@ -526,6 +552,7 @@ class AgentService:
                 if not label.buyer_name
             ]
             filled = 0
+            problems: list[str] = []
             for label in candidates:
                 path = next(
                     (
@@ -536,20 +563,45 @@ class AgentService:
                     None,
                 )
                 if path is None:
+                    problems.append(f"label {label.id}: no pdf on disk to read")
                     continue
-                buyer = clean_person_name(read_ship_to_name(path, self.config))
-                if buyer:
-                    self.db.update_label(label.id, buyer_name=buyer)
-                    filled += 1
+                try:
+                    raw_name = read_ship_to_name(path, self.config)
+                except Exception as exc:
+                    problems.append(f"label {label.id}: vision call failed: {exc}")
+                    continue
+                if raw_name is None:
+                    problems.append(
+                        f"label {label.id}: the model could not read a name "
+                        "off the label"
+                    )
+                    continue
+                buyer = clean_person_name(raw_name)
+                if not buyer:
+                    problems.append(
+                        f"label {label.id}: read {raw_name!r} off the label, "
+                        "which does not look like a person's name"
+                    )
+                    continue
+                self.db.update_label(label.id, buyer_name=buyer)
+                filled += 1
             if filled:
                 self.db.add_event(
                     Stage.SYSTEM,
                     Level.INFO,
                     f"backfilled the buyer name on {filled} label(s) from their PDFs",
                 )
+            if problems:
+                self.db.add_event(
+                    Stage.SYSTEM,
+                    Level.WARN,
+                    "buyer-name backfill could not fill "
+                    f"{len(problems)} label(s): {'; '.join(problems)}",
+                )
         return {
             "checked": len(candidates),
             "filled": filled,
+            "problems": problems,
             "detail": (
                 f"{filled} of {len(candidates)} label(s) without a buyer name "
                 f"on {day} filled from their PDFs"

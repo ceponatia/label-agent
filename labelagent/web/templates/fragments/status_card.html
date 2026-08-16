@@ -1,4 +1,4 @@
-<section class="card status-card" id="status-card">
+<section class="card status-card" id="status-card"{% if oob %} hx-swap-oob="outerHTML"{% endif %}>
   <div class="status-head">
     <span class="state state-{{ state.agent_state }}">{{ state.agent_state | title }}</span>
     <span class="printer">
@@ -22,6 +22,10 @@
               hx-target="#status-card" hx-swap="outerHTML">Pause</button>
     {% endif %}
 
+    {# #check-result lives outside this card, on the page: the card refreshes
+       itself every few seconds and would otherwise wipe the answer a moment
+       after it arrived. (hx-preserve is not an option - htmx 1.9 does not
+       apply it to out-of-band swaps.) #}
     <button class="btn" hx-post="/api/agent/check-now"
             hx-target="#check-result" hx-swap="innerHTML"
             hx-indicator="#check-result">Check now</button>
@@ -33,8 +37,6 @@
       <span class="knob"></span>Auto-print {{ 'on' if state.auto_print else 'off' }}
     </button>
   </div>
-
-  <div id="check-result" class="check-result"></div>
 
   {% if state.agent_state == 'paused' %}
     <p class="note">Paused: email is still read and labels are still prepared &mdash; nothing is sent to the printer.</p>

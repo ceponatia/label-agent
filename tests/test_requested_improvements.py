@@ -163,7 +163,7 @@ def test_dashboard_live_refreshes_counts_and_shows_buyer(tmp_path):
 
         assert 'id="today-counts"' in body
         assert 'hx-trigger="every 3s"' in body
-        assert 'hx-get="/api/dashboard/counts"' in body
+        assert 'hx-get="/api/dashboard/live"' in body
         # Rows read "{buyer}: {item}", split over two lines: the buyer leads
         # and the item sits under it in the smaller row-item style.
         assert "Vanessa Chavez:" in body
@@ -173,6 +173,111 @@ def test_dashboard_live_refreshes_counts_and_shows_buyer(tmp_path):
         assert fragment.status_code == 200
         assert 'id="today-counts"' in fragment.text
         assert "printed today" in fragment.text
+    finally:
+        db.close()
+
+
+def test_every_changing_region_of_the_dashboard_refreshes_itself(tmp_path):
+    """One poll updates the status card too, not just the counts.
+
+    "Last email check" sitting at a stale time while the chips above it moved
+    was the visible half of this; the label lists were the other half.
+    """
+    config = Config(data_dir=str(tmp_path / "data"), db_path=str(tmp_path / "test.db"))
+    db = Database(config.db_path)
+    db.init()
+    try:
+        db.insert_label(
+            Label(
+                item_title="Blue Sweater",
+                gmail_message_id="live-1",
+                status=LabelStatus.NEEDS_REVIEW,
+            )
+        )
+        controller = StubController(last_poll_at="2026-08-16T09:30:00")
+        client = TestClient(create_app(db, config, controller))
+        body = client.get("/").text
+
+        assert 'hx-get="/api/dashboard/live"' in body
+        assert 'hx-get="/api/dashboard/labels"' in body
+
+        status = client.get("/api/dashboard/live").text
+        for region in ("status-card", "today-counts"):
+            assert f'id="{region}"' in status, region
+        assert status.count('hx-swap-oob="outerHTML"') == 2
+        assert "2026-08-16T09:30:00" in status
+
+        labels = client.get("/api/dashboard/labels").text
+        for region in ("attention-list", "today-list"):
+            assert f'id="{region}"' in labels, region
+        assert labels.count('hx-swap-oob="outerHTML"') == 2
+        assert "Blue Sweater" in labels
+
+        # A later check has to show up without touching the browser.
+        controller.check_now()
+        assert "2026-08-01T09:45:00" in client.get("/api/dashboard/live").text
+    finally:
+        db.close()
+
+
+def test_an_action_result_survives_the_live_refresh(tmp_path):
+    """The Check now summary sits outside the card that refreshes itself.
+
+    htmx 1.9 does not apply hx-preserve to out-of-band swaps, so anything
+    written inside a refreshing region is gone within a poll or two.
+    """
+    config = Config(data_dir=str(tmp_path / "data"), db_path=str(tmp_path / "test.db"))
+    db = Database(config.db_path)
+    db.init()
+    try:
+        client = TestClient(create_app(db, config, StubController()))
+
+        assert 'id="check-result"' in client.get("/").text
+        # Neither refreshing fragment may carry it, or the poll would clear it.
+        assert 'id="check-result"' not in client.get("/api/dashboard/live").text
+        assert 'id="check-result"' not in client.get("/api/dashboard/labels").text
+    finally:
+        db.close()
+
+
+def test_status_card_returned_on_its_own_is_not_an_out_of_band_swap(tmp_path):
+    """Pause/resume swap the card directly; an oob attribute there swaps nothing."""
+    config = Config(data_dir=str(tmp_path / "data"), db_path=str(tmp_path / "test.db"))
+    db = Database(config.db_path)
+    db.init()
+    try:
+        client = TestClient(create_app(db, config, StubController()))
+        card = client.post("/api/agent/pause", headers={"HX-Request": "true"}).text
+
+        assert 'id="status-card"' in card
+        assert "hx-swap-oob" not in card
+    finally:
+        db.close()
+
+
+def test_one_label_in_both_dashboard_lists_gets_its_own_result_targets(tmp_path):
+    """A needs-review label created today is in both lists.
+
+    Both copies used to carry id="result-{id}", so htmx wrote the outcome of a
+    print into whichever one came first in the page - sometimes the row in the
+    other section, leaving the tapped button with no feedback at all.
+    """
+    config = Config(data_dir=str(tmp_path / "data"), db_path=str(tmp_path / "test.db"))
+    db = Database(config.db_path)
+    db.init()
+    try:
+        db.insert_label(
+            Label(
+                item_title="Blue Sweater",
+                gmail_message_id="both-lists",
+                status=LabelStatus.NEEDS_REVIEW,
+            )
+        )
+        body = TestClient(create_app(db, config, StubController())).get("/").text
+
+        assert body.count('id="result-attention-1"') == 1
+        assert body.count('id="result-today-1"') == 1
+        assert 'id="result-1"' not in body
     finally:
         db.close()
 
@@ -244,10 +349,60 @@ def test_backfill_fills_existing_labels_without_printing(tmp_path, monkeypatch):
 
         assert result["checked"] == 1
         assert result["filled"] == 1
+        assert result["problems"] == []
         label = db.get_label(1)
         assert label.buyer_name == "Amy Buyer"
         assert label.status == LabelStatus.PRINTED
         assert list((tmp_path / "printed").glob("*")) == []
+    finally:
+        db.close()
+
+
+def test_backfill_reports_why_each_label_was_not_filled(tmp_path, monkeypatch):
+    """"0 of 5 filled" with no reasons is undebuggable; every miss must say why."""
+    from labelagent import verify as verify_module
+    from labelagent.printing import FilePrinter
+    from labelagent.service import AgentService
+
+    config = Config(
+        data_dir=str(tmp_path / "data"),
+        db_path=str(tmp_path / "test.db"),
+        anthropic_api_key="k",
+    )
+    db = _database(tmp_path)
+    pdf = tmp_path / "print.pdf"
+    doc = fitz.open()
+    doc.new_page(width=288, height=432)
+    doc.save(str(pdf))
+    doc.close()
+    db.insert_label(
+        Label(gmail_message_id="miss-1", status=LabelStatus.PRINTED)
+    )
+    db.insert_label(
+        Label(gmail_message_id="miss-2", status=LabelStatus.PRINTED, print_path=str(pdf))
+    )
+
+    def exploding(png, config):
+        raise RuntimeError("invalid x-api-key")
+
+    monkeypatch.setattr(verify_module, "call_vision_api", exploding)
+    service = AgentService(
+        db,
+        config,
+        printer=FilePrinter(tmp_path / "printed"),
+        fetcher_factory=lambda cfg: FakeFetcher([]),
+    )
+    try:
+        result = service.backfill_buyer_names()
+
+        assert result["filled"] == 0
+        assert result["checked"] == 2
+        assert sorted(result["problems"]) == [
+            "label 1: no pdf on disk to read",
+            "label 2: vision call failed: invalid x-api-key",
+        ]
+        warnings = db.list_events(level=Level.WARN)
+        assert any("buyer-name backfill" in event.message for event in warnings)
     finally:
         db.close()
 
@@ -272,7 +427,10 @@ def test_backfill_without_api_key_says_why_it_cannot_run(tmp_path, monkeypatch):
     try:
         result = service.backfill_buyer_names()
         assert result["filled"] == 0
-        assert "API key" in result["detail"]
+        assert "no vision provider configured" in result["detail"]
+        # and it names both ways to fix that
+        assert "ANTHROPIC_API_KEY" in result["detail"]
+        assert "REPLICATE_API_TOKEN" in result["detail"]
     finally:
         db.close()
 

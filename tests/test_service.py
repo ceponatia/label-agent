@@ -525,6 +525,52 @@ def test_state_matches_the_web_controller_shape(db, config, printer):
     assert state["last_poll_at"] is None
 
 
+class CountingPrinter(OfflinePrinter):
+    """An OfflinePrinter that records how often it was asked if it is up."""
+
+    def __init__(self, available_flag: bool = True):
+        super().__init__(available_flag=available_flag)
+        self.checks = 0
+
+    def available(self) -> bool:
+        self.checks += 1
+        return self.available_flag
+
+
+def test_the_dashboard_reads_a_cached_printer_state(db, config):
+    """state() runs every few seconds now; asking the printer shells out."""
+    printer = CountingPrinter(available_flag=True)
+    service = make_service(db, config, printer)
+
+    for _ in range(5):
+        assert service.state()["printer_available"] is True
+
+    assert printer.checks == 1
+
+
+def test_deciding_whether_to_print_never_uses_the_cached_state(db, config):
+    """A stale yes here would send a label at a printer that is off."""
+    printer = CountingPrinter(available_flag=True)
+    service = make_service(db, config, printer)
+    service.state()
+
+    printer.available_flag = False
+
+    assert service.printer_available() is False
+    assert printer.checks == 2
+    # and the display follows the fresh answer rather than the old one
+    assert service.state()["printer_available"] is False
+
+
+def test_changing_the_printer_drops_the_cached_state(db, config):
+    service = make_service(db, config, CountingPrinter(available_flag=True))
+    assert service.state()["printer_available"] is True
+
+    service.set_printer_name("Some_Other_Queue")
+
+    assert service._printer_check is None
+
+
 def test_service_implements_every_controller_method(db, config, printer):
     service = make_service(db, config, printer)
     for name in ("state", "pause", "resume", "set_auto_print", "check_now",

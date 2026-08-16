@@ -31,6 +31,12 @@ class Config:
     imap_folder: str = "INBOX"
     anthropic_api_key: str = ""
     classifier_model: str = "claude-haiku-4-5"
+    # Who runs the vision check on a label: "anthropic" talks to the Anthropic
+    # API directly, "replicate" goes through Replicate. See verify.py for what
+    # each one costs you in practice.
+    vision_provider: str = "anthropic"
+    vision_model: str = ""
+    replicate_api_token: str = ""
     poshmark_sender_domain: str = "poshmark.com"
     vinted_sender_domain: str = "vinted.com"
 
@@ -59,6 +65,9 @@ FIELDS: dict[str, tuple[type, str]] = {
     "imap_folder": (str, "LABELAGENT_IMAP_FOLDER"),
     "anthropic_api_key": (str, "ANTHROPIC_API_KEY"),
     "classifier_model": (str, "LABELAGENT_CLASSIFIER_MODEL"),
+    "vision_provider": (str, "LABELAGENT_VISION_PROVIDER"),
+    "vision_model": (str, "LABELAGENT_VISION_MODEL"),
+    "replicate_api_token": (str, "REPLICATE_API_TOKEN"),
     "poshmark_sender_domain": (str, "LABELAGENT_POSHMARK_SENDER_DOMAIN"),
     "vinted_sender_domain": (str, "LABELAGENT_VINTED_SENDER_DOMAIN"),
 }

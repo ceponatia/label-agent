@@ -114,7 +114,9 @@ def cmd_backfill_buyers(args) -> int:
     finally:
         db.close()
     print(result["detail"])
-    return 0
+    for problem in result["problems"]:
+        print(f"  {problem}")
+    return 0 if not result["problems"] else 1
 
 
 def cmd_test_print(args) -> int:

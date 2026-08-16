@@ -284,15 +284,19 @@ def create_app(db: Database, config: Config, controller: AgentController) -> Fas
 
     # --- pages ----------------------------------------------------------
 
-    @app.get("/")
-    def dashboard(request: Request) -> Response:
+    def dashboard_context() -> dict:
         context = status_context()
         context.update(
-            active="dashboard",
             attention=attention_labels(),
             recent=db.list_labels(date=_today(), limit=50),
         )
-        return templates.TemplateResponse(request, "dashboard.html", context)
+        return context
+
+    @app.get("/")
+    def dashboard(request: Request) -> Response:
+        return templates.TemplateResponse(
+            request, "dashboard.html", {**dashboard_context(), "active": "dashboard"}
+        )
 
     @app.get("/history")
     def history(request: Request, date: str | None = None) -> Response:
@@ -364,6 +368,31 @@ def create_app(db: Database, config: Config, controller: AgentController) -> Fas
     def api_dashboard_counts(request: Request) -> Response:
         return templates.TemplateResponse(
             request, "fragments/today_counts.html", {"counts": today_counts()}
+        )
+
+    @app.get("/api/dashboard/live")
+    def api_dashboard_live(request: Request) -> Response:
+        """The status card and counts, as out-of-band swaps.
+
+        `oob` is what turns each fragment into one: rendered into the page (or
+        returned on its own by pause/resume) the same templates carry no
+        hx-swap-oob and swap normally.
+        """
+        return templates.TemplateResponse(
+            request, "fragments/live_status.html", {**status_context(), "oob": True}
+        )
+
+    @app.get("/api/dashboard/labels")
+    def api_dashboard_labels(request: Request) -> Response:
+        """Both dashboard label lists, as out-of-band swaps."""
+        return templates.TemplateResponse(
+            request,
+            "fragments/live_labels.html",
+            {
+                "attention": attention_labels(),
+                "recent": db.list_labels(date=_today(), limit=50),
+                "oob": True,
+            },
         )
 
     @app.get("/api/status")

@@ -70,6 +70,25 @@ web_host = "0.0.0.0"
 web_port = 8080
 
 # --- llm -------------------------------------------------------------------
-# Model used for email classification and crop verification.
+# Model used to classify emails. Text only, and it degrades to the built-in
+# regex heuristics when no Anthropic key is set.
 # env: LABELAGENT_CLASSIFIER_MODEL
 classifier_model = "claude-haiku-4-5"
+
+# Who runs the vision check that verifies the cropped label and reads the
+# buyer's name off its ship-to block: "anthropic" (needs ANTHROPIC_API_KEY) or
+# "replicate" (needs REPLICATE_API_TOKEN).
+#
+# Worth knowing before switching: Replicate resells Claude at Anthropic's own
+# per-token rate, so it saves nothing, and no model on Replicate accepts a JSON
+# schema - the reply is parsed leniently either way. Its per-GPU-second
+# community models are cheaper per call only in theory: they cold-boot for
+# anything up to minutes, which a label waiting to print cannot afford.
+# env: LABELAGENT_VISION_PROVIDER
+vision_provider = "anthropic"
+
+# Overrides the provider's default model. Defaults are claude-haiku-4-5 for
+# anthropic and google/gemini-3-flash for replicate (about half Claude's price,
+# always warm, and strong at reading documents).
+# env: LABELAGENT_VISION_MODEL
+# vision_model = ""
