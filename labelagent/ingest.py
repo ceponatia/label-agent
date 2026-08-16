@@ -8,24 +8,45 @@ re-fetches rather than loses a label.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
+
+import fitz
 
 from . import storage
 from .classify import classify_email
 from .config import Config
 from .db import Database, now_iso
-from .emailparse import EmailCandidate, is_candidate, parse_email
+from .emailparse import EmailCandidate, detect_platform, is_candidate, parse_email
 from .models import Label, LabelStatus, Level, Stage
 
 PROCESSED_LABEL = "label-agent/processed"
 LAST_POLL_KEY = "last_poll_at"
 
+# Poshmark sometimes sends the sale email before its label service can generate
+# the PDF. Those notices have no attachment, so include the phrases Poshmark
+# uses for that condition in the real polling query without widening the poll
+# to every offer/comment/marketing email from the platforms.
+POSHMARK_DELAY_SEARCH = '{has:attachment "shipping label system" "label service"}'
+
 # Statuses that mean "ingest never finished". Only these get their attachment
 # re-saved when the message comes round again; a pruned printed/duplicate row
 # has legitimately lost its PDF and must not be resurrected into the queue.
 RECOVERABLE = (LabelStatus.INGESTED, LabelStatus.FAILED)
+
+_POSHMARK_DELAY_PATTERNS = (
+    re.compile(r"shipping\s+label\s+system\s+is\s+experiencing\s+(?:delays?|issues?)", re.I),
+    re.compile(r"label\s+service\s+(?:is\s+)?(?:not\s+available|unavailable|down)", re.I),
+    re.compile(
+        r"(?:pre[- ]paid[, ]+pre[- ]addressed\s+)?shipping\s+label.*?"
+        r"automatically\s+(?:mailed|emailed)\s+to\s+you.*?service\s+is\s+available",
+        re.I | re.S,
+    ),
+)
+_POSHMARK_BUYER_RE = re.compile(r"^\s*Buyer\s*\n\s*([^\r\n]+)", re.I | re.M)
+_PDF_RECIPIENT_MARKERS = ("SHIP TO", "SHIP TO ADDRESS", "DELIVER TO", "RECIPIENT")
 
 
 class IngestError(RuntimeError):
@@ -72,6 +93,78 @@ def _duplicate_of(db: Database, tracking: str | None) -> Label | None:
     return None
 
 
+def is_poshmark_label_delay(c: EmailCandidate) -> bool:
+    """Return True for Poshmark's no-PDF sale notice during label outages."""
+    if detect_platform(c) != "poshmark" or c.pdf_attachments:
+        return False
+    text = f"{c.subject}\n{c.body_text}"
+    return any(pattern.search(text) for pattern in _POSHMARK_DELAY_PATTERNS)
+
+
+def _clean_person_name(value: str | None) -> str | None:
+    name = " ".join((value or "").strip().strip(":").split())
+    if not name or len(name) > 80 or not any(ch.isalpha() for ch in name):
+        return None
+    if name[0].isdigit() or any(ch.isdigit() for ch in name) or "@" in name:
+        return None
+    upper = name.upper()
+    if any(
+        phrase in upper
+        for phrase in ("USPS", "TRACKING", "PRIORITY MAIL", "GROUND ADVANTAGE", "SHIP TO")
+    ):
+        return None
+    return name.title() if name.isupper() else name
+
+
+def _buyer_from_email(c: EmailCandidate) -> str | None:
+    if detect_platform(c) != "poshmark":
+        return None
+    match = _POSHMARK_BUYER_RE.search(c.body_text or "")
+    return _clean_person_name(match.group(1)) if match else None
+
+
+def _buyer_from_pdf(path: Path) -> str | None:
+    """Best-effort recipient extraction from the shipping label itself.
+
+    Vinted's email body does not always contain the buyer's real name, while the
+    shipping label necessarily contains the recipient. Failure here is metadata
+    loss only and must never make an otherwise printable label fail ingestion.
+    """
+    try:
+        with fitz.open(str(path)) as doc:
+            if doc.page_count == 0:
+                return None
+            text = doc.load_page(0).get_text("text") or ""
+    except Exception:
+        return None
+
+    lines = [" ".join(line.split()) for line in text.splitlines() if line.strip()]
+    for index, line in enumerate(lines):
+        upper = line.upper()
+        for marker in _PDF_RECIPIENT_MARKERS:
+            if upper == marker or upper == f"{marker}:":
+                if index + 1 < len(lines):
+                    candidate = _clean_person_name(lines[index + 1])
+                    if candidate:
+                        return candidate
+            elif upper.startswith(f"{marker}:"):
+                candidate = _clean_person_name(line.split(":", 1)[1])
+                if candidate:
+                    return candidate
+    return None
+
+
+def _fill_buyer_name(
+    db: Database, label_id: int, c: EmailCandidate, pdf_path: Path | None = None
+) -> str | None:
+    buyer = _buyer_from_email(c)
+    if not buyer and pdf_path is not None:
+        buyer = _buyer_from_pdf(pdf_path)
+    if buyer:
+        db.update_label(label_id, buyer_name=buyer)
+    return buyer
+
+
 def _process_message(
     db: Database,
     config: Config,
@@ -81,6 +174,19 @@ def _process_message(
     result: IngestResult,
 ) -> None:
     c = parse_email(raw, uid)
+
+    if is_poshmark_label_delay(c):
+        result.skipped += 1
+        subject = c.subject or "(no subject)"
+        db.add_event(
+            Stage.INGEST,
+            Level.ERROR,
+            "Poshmark could not generate the shipping label because its label service "
+            "is temporarily delayed. No action is needed; Poshmark says it will email "
+            f"the prepaid label automatically when service is available again. Sale email: {subject}",
+        )
+        fetcher.mark_processed(uid)
+        return
 
     if not is_candidate(c, config):
         result.skipped += 1
@@ -106,7 +212,9 @@ def _process_message(
         # Gmail search, stranding a prepaid label with no PDF and no UI action
         # that could bring it back.
         if existing.status in RECOVERABLE and not _has_original(existing):
-            _save_attachment(db, config, existing.id, c)
+            _, path = _save_attachment(db, config, existing.id, c)
+            if not existing.buyer_name:
+                _fill_buyer_name(db, existing.id, c, path)
             db.update_status(existing.id, LabelStatus.INGESTED, None)
             db.add_event(
                 Stage.INGEST,
@@ -124,6 +232,7 @@ def _process_message(
     label = Label(
         platform=classification.platform,
         item_title=classification.item_title,
+        buyer_name=_buyer_from_email(c),
         order_ref=classification.order_ref,
         tracking_number=classification.tracking_number,
         ship_by=classification.ship_by,
@@ -145,6 +254,9 @@ def _process_message(
             label.id, LabelStatus.FAILED, f"could not save attachment: {exc}"
         )
         raise
+
+    if not label.buyer_name:
+        _fill_buyer_name(db, label.id, c, path)
 
     if duplicate:
         result.duplicates.append(label.id)
@@ -245,16 +357,19 @@ class ImapFetcher:
 
     # gmail queries
 
-    def search_query(self) -> str:
-        return (
+    def search_query(self, include_label_delays: bool = False) -> str:
+        sender = (
             f"(from:{self.config.poshmark_sender_domain} "
-            f"OR from:{self.config.vinted_sender_domain}) "
-            f"has:attachment -label:{PROCESSED_LABEL}"
+            f"OR from:{self.config.vinted_sender_domain})"
         )
+        candidate = POSHMARK_DELAY_SEARCH if include_label_delays else "has:attachment"
+        return f"{sender} {candidate} -label:{PROCESSED_LABEL}"
 
-    def search_uids(self) -> list[str]:
+    def search_uids(self, include_label_delays: bool = False) -> list[str]:
         status, data = self.client.uid(
-            "SEARCH", "X-GM-RAW", _imap_quoted(self.search_query())
+            "SEARCH",
+            "X-GM-RAW",
+            _imap_quoted(self.search_query(include_label_delays=include_label_delays)),
         )
         _check(status, "SEARCH")
         uids: list[str] = []
@@ -278,7 +393,10 @@ class ImapFetcher:
     # Fetcher protocol
 
     def _fetch_candidates_once(self) -> list[tuple[str, bytes]]:
-        return [(uid, self.fetch_raw(uid)) for uid in self.search_uids()]
+        return [
+            (uid, self.fetch_raw(uid))
+            for uid in self.search_uids(include_label_delays=True)
+        ]
 
     def fetch_candidates(self) -> list[tuple[str, bytes]]:
         """Fetch candidates, reconnecting once if a cached IMAP socket died.
@@ -319,4 +437,6 @@ __all__ = [
     "make_fetcher",
     "PROCESSED_LABEL",
     "LAST_POLL_KEY",
+    "POSHMARK_DELAY_SEARCH",
+    "is_poshmark_label_delay",
 ]

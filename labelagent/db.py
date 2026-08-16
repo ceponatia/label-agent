@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS labels (
   id INTEGER PRIMARY KEY,
   platform TEXT CHECK(platform IN ('poshmark','vinted')),
   item_title TEXT,
+  buyer_name TEXT,
   order_ref TEXT,
   tracking_number TEXT,
   ship_by TEXT,
@@ -52,6 +53,7 @@ CREATE TABLE IF NOT EXISTS settings (
 LABEL_COLUMNS = (
     "platform",
     "item_title",
+    "buyer_name",
     "order_ref",
     "tracking_number",
     "ship_by",
@@ -102,6 +104,11 @@ class Database:
     def init(self) -> None:
         with self._lock:
             self.conn.executescript(SCHEMA)
+            columns = {
+                row["name"] for row in self.conn.execute("PRAGMA table_info(labels)").fetchall()
+            }
+            if "buyer_name" not in columns:
+                self.conn.execute("ALTER TABLE labels ADD COLUMN buyer_name TEXT")
             self.conn.commit()
 
     def close(self) -> None:

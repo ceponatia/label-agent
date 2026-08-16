@@ -4,21 +4,7 @@
 
 {% block content %}
 {% include "fragments/status_card.html" %}
-
-<section class="chips" aria-label="Today">
-  <a class="chip" href="/history">
-    <span class="n">{{ counts.printed }}</span><span class="l">printed today</span>
-  </a>
-  <a class="chip" href="/history">
-    <span class="n">{{ counts.pending }}</span><span class="l">pending</span>
-  </a>
-  <a class="chip {{ 'warn' if counts.needs_review }}" href="/history">
-    <span class="n">{{ counts.needs_review }}</span><span class="l">needs review</span>
-  </a>
-  <a class="chip {{ 'bad' if counts.errors }}" href="/errors">
-    <span class="n">{{ counts.errors }}</span><span class="l">errors today</span>
-  </a>
-</section>
+{% include "fragments/today_counts.html" %}
 
 <section class="card">
   <h2>Needs attention</h2>

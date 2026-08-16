@@ -1,0 +1,16 @@
+<section class="chips" id="today-counts" aria-label="Today"
+         hx-get="/api/dashboard/counts" hx-trigger="every 3s"
+         hx-target="#today-counts" hx-swap="outerHTML">
+  <a class="chip" href="/history">
+    <span class="n">{{ counts.printed }}</span><span class="l">printed today</span>
+  </a>
+  <a class="chip" href="/history">
+    <span class="n">{{ counts.pending }}</span><span class="l">pending</span>
+  </a>
+  <a class="chip {{ 'warn' if counts.needs_review }}" href="/history">
+    <span class="n">{{ counts.needs_review }}</span><span class="l">needs review</span>
+  </a>
+  <a class="chip {{ 'bad' if counts.errors }}" href="/errors">
+    <span class="n">{{ counts.errors }}</span><span class="l">errors today</span>
+  </a>
+</section>
