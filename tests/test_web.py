@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
 
-import fitz
+import pymupdf as fitz
 import pytest
 from fastapi.testclient import TestClient
 

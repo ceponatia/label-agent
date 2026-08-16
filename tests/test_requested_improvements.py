@@ -2,7 +2,7 @@ import sqlite3
 from email.message import EmailMessage
 from pathlib import Path
 
-import fitz
+import pymupdf as fitz
 from fastapi.testclient import TestClient
 
 from labelagent import ingest as ingest_module

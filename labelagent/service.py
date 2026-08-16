@@ -15,7 +15,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
-import fitz
+import pymupdf as fitz
 
 from . import storage
 from .config import Config

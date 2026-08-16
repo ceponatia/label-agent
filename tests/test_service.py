@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 from email.message import EmailMessage
 from pathlib import Path
 
-import fitz
+import pymupdf as fitz
 import pytest
 
 from labelagent.config import Config
