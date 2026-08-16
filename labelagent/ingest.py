@@ -117,7 +117,7 @@ def is_poshmark_label_delay(c: EmailCandidate) -> bool:
     return any(pattern.search(text) for pattern in _POSHMARK_DELAY_PATTERNS)
 
 
-def _clean_person_name(value: str | None) -> str | None:
+def clean_person_name(value: str | None) -> str | None:
     name = " ".join((value or "").strip().strip(":").split())
     if not name or len(name) > 80 or not any(ch.isalpha() for ch in name):
         return None
@@ -136,7 +136,7 @@ def _buyer_from_email(c: EmailCandidate) -> str | None:
     if detect_platform(c) != "poshmark":
         return None
     match = _POSHMARK_BUYER_RE.search(c.body_text or "")
-    return _clean_person_name(match.group(1)) if match else None
+    return clean_person_name(match.group(1)) if match else None
 
 
 def _buyer_from_pdf(path: Path) -> str | None:
@@ -160,11 +160,11 @@ def _buyer_from_pdf(path: Path) -> str | None:
         for marker in _PDF_RECIPIENT_MARKERS:
             if upper == marker or upper == f"{marker}:":
                 if index + 1 < len(lines):
-                    candidate = _clean_person_name(lines[index + 1])
+                    candidate = clean_person_name(lines[index + 1])
                     if candidate:
                         return candidate
             elif upper.startswith(f"{marker}:"):
-                candidate = _clean_person_name(line.split(":", 1)[1])
+                candidate = clean_person_name(line.split(":", 1)[1])
                 if candidate:
                     return candidate
     return None
@@ -521,6 +521,7 @@ __all__ = [
     "ImapFetcher",
     "poll_once",
     "make_fetcher",
+    "clean_person_name",
     "PROCESSED_LABEL",
     "LAST_POLL_KEY",
     "POSHMARK_DELAY_SEARCH",

@@ -20,11 +20,11 @@ import fitz
 from . import storage
 from .config import Config
 from .db import Database
-from .ingest import LAST_POLL_KEY, Fetcher, make_fetcher, poll_once
+from .ingest import LAST_POLL_KEY, Fetcher, clean_person_name, make_fetcher, poll_once
 from .models import Label, LabelStatus, Level, Stage
 from .pipeline import TARGET_HEIGHT, TARGET_WIDTH, process_label_pdf
 from .printing import JobStatus, Printer, PrinterUnavailable, make_printer
-from .verify import verify_print_pdf
+from .verify import read_ship_to_name, verify_print_pdf
 
 AGENT_STATE_KEY = "agent_state"
 AUTO_PRINT_KEY = "auto_print"
@@ -287,6 +287,13 @@ class AgentService:
             problems += verdict.problems
             source = verdict.source
             barcodes = verdict.barcodes
+            # The email rarely names the buyer (Vinted never does), but the
+            # label always does: the first line of the ship-to address. The
+            # vision check just read the label, so keep what it found.
+            if not label.buyer_name:
+                buyer = clean_person_name(verdict.ship_to_name)
+                if buyer:
+                    self.db.update_label(label.id, buyer_name=buyer)
 
         if problems or result.needs_review:
             detail = "; ".join(dict.fromkeys(problems)) or "needs a look before printing"
@@ -492,6 +499,64 @@ class AgentService:
         }
 
     # --- housekeeping ----------------------------------------------------
+
+    def backfill_buyer_names(self, day: str | None = None) -> dict:
+        """Fill missing buyer names for one day's labels by re-reading their PDFs.
+
+        Touches only the buyer_name column - a label's status never changes, so
+        nothing here can reach the printer. One vision call per label; without
+        an API key the raster label PDFs cannot be read at all, so say so
+        instead of quietly doing nothing.
+        """
+        if not self.config.anthropic_api_key:
+            return {
+                "checked": 0,
+                "filled": 0,
+                "detail": (
+                    "no Anthropic API key configured: the label PDFs are images, "
+                    "so there is nothing that can read the buyer name off them"
+                ),
+            }
+
+        day = day or datetime.now().strftime("%Y-%m-%d")
+        with self._lock:
+            candidates = [
+                label
+                for label in self.db.list_labels(date=day)
+                if not label.buyer_name
+            ]
+            filled = 0
+            for label in candidates:
+                path = next(
+                    (
+                        p
+                        for p in (label.print_path, label.original_path)
+                        if p and Path(p).is_file()
+                    ),
+                    None,
+                )
+                if path is None:
+                    continue
+                buyer = clean_person_name(read_ship_to_name(path, self.config))
+                if buyer:
+                    self.db.update_label(label.id, buyer_name=buyer)
+                    filled += 1
+            if filled:
+                self.db.add_event(
+                    Stage.SYSTEM,
+                    Level.INFO,
+                    f"backfilled the buyer name on {filled} label(s) from their PDFs",
+                )
+        return {
+            "checked": len(candidates),
+            "filled": filled,
+            "detail": (
+                f"{filled} of {len(candidates)} label(s) without a buyer name "
+                f"on {day} filled from their PDFs"
+                if candidates
+                else f"every label on {day} already has a buyer name"
+            ),
+        }
 
     def prune_old_files(self) -> dict:
         """Delete label PDFs past the retention window.

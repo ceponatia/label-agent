@@ -164,12 +164,115 @@ def test_dashboard_live_refreshes_counts_and_shows_buyer(tmp_path):
         assert 'id="today-counts"' in body
         assert 'hx-trigger="every 3s"' in body
         assert 'hx-get="/api/dashboard/counts"' in body
-        assert "Buyer: Vanessa Chavez" in body
+        # Rows read "{buyer}: {item}", split over two lines: the buyer leads
+        # and the item sits under it in the smaller row-item style.
+        assert "Vanessa Chavez:" in body
+        assert '<span class="row-item">Blue Sweater</span>' in body
 
         fragment = client.get("/api/dashboard/counts")
         assert fragment.status_code == 200
         assert 'id="today-counts"' in fragment.text
         assert "printed today" in fragment.text
+    finally:
+        db.close()
+
+
+def _vision_stub(name):
+    return lambda png, config: {"ok": True, "problems": [], "ship_to_name": name}
+
+
+def test_pipeline_reads_buyer_name_off_the_label_via_vision(tmp_path, monkeypatch):
+    """Vinted's email never names the buyer; the label's ship-to line does."""
+    from labelagent import verify as verify_module
+    from labelagent.printing import FilePrinter
+    from labelagent.service import AgentService
+
+    config = Config(
+        data_dir=str(tmp_path / "data"),
+        db_path=str(tmp_path / "test.db"),
+        anthropic_api_key="k",
+    )
+    db = _database(tmp_path)
+    monkeypatch.setattr(verify_module, "call_vision_api", _vision_stub("SARA EXAMPLE"))
+    raw = (FIXTURES / "vinted-direct.eml").read_bytes()
+    service = AgentService(
+        db,
+        config,
+        printer=FilePrinter(tmp_path / "printed"),
+        fetcher_factory=lambda cfg: FakeFetcher([("vinted", raw)]),
+    )
+    try:
+        service.check_now()
+        assert db.get_label(1).buyer_name == "Sara Example"
+    finally:
+        db.close()
+
+
+def test_backfill_fills_existing_labels_without_printing(tmp_path, monkeypatch):
+    from labelagent import verify as verify_module
+    from labelagent.printing import FilePrinter
+    from labelagent.service import AgentService
+
+    config = Config(
+        data_dir=str(tmp_path / "data"),
+        db_path=str(tmp_path / "test.db"),
+        anthropic_api_key="k",
+    )
+    db = _database(tmp_path)
+    pdf = tmp_path / "print.pdf"
+    doc = fitz.open()
+    doc.new_page(width=288, height=432)
+    doc.save(str(pdf))
+    doc.close()
+    db.insert_label(
+        Label(
+            item_title="Blue Sweater",
+            gmail_message_id="backfill-1",
+            status=LabelStatus.PRINTED,
+            print_path=str(pdf),
+        )
+    )
+    monkeypatch.setattr(verify_module, "call_vision_api", _vision_stub("Amy Buyer"))
+    service = AgentService(
+        db,
+        config,
+        printer=FilePrinter(tmp_path / "printed"),
+        fetcher_factory=lambda cfg: FakeFetcher([]),
+    )
+    try:
+        result = service.backfill_buyer_names()
+
+        assert result["checked"] == 1
+        assert result["filled"] == 1
+        label = db.get_label(1)
+        assert label.buyer_name == "Amy Buyer"
+        assert label.status == LabelStatus.PRINTED
+        assert list((tmp_path / "printed").glob("*")) == []
+    finally:
+        db.close()
+
+
+def test_backfill_without_api_key_says_why_it_cannot_run(tmp_path, monkeypatch):
+    from labelagent import verify as verify_module
+    from labelagent.printing import FilePrinter
+    from labelagent.service import AgentService
+
+    def must_not_run(png, config):
+        raise AssertionError("the vision call ran without an API key")
+
+    monkeypatch.setattr(verify_module, "call_vision_api", must_not_run)
+    config = Config(data_dir=str(tmp_path / "data"), db_path=str(tmp_path / "test.db"))
+    db = _database(tmp_path)
+    service = AgentService(
+        db,
+        config,
+        printer=FilePrinter(tmp_path / "printed"),
+        fetcher_factory=lambda cfg: FakeFetcher([]),
+    )
+    try:
+        result = service.backfill_buyer_names()
+        assert result["filled"] == 0
+        assert "API key" in result["detail"]
     finally:
         db.close()
 

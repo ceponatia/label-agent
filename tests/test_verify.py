@@ -216,6 +216,73 @@ def test_llm_failure_degrades_to_deterministic(poshmark_print, monkeypatch):
     assert result.source == "deterministic"
 
 
+def test_llm_ship_to_name_is_captured(poshmark_print, monkeypatch):
+    monkeypatch.setattr(
+        verify_module,
+        "call_vision_api",
+        lambda png, config: {"ok": True, "problems": [], "ship_to_name": "  Vanessa Chavez  "},
+    )
+
+    result = verify_print_pdf(poshmark_print, config=Config(anthropic_api_key="k"))
+
+    assert result.ok
+    assert result.ship_to_name == "Vanessa Chavez"
+
+
+def test_llm_ship_to_name_garbage_or_missing_is_none(poshmark_print, monkeypatch):
+    monkeypatch.setattr(
+        verify_module,
+        "call_vision_api",
+        lambda png, config: {"ok": True, "problems": [], "ship_to_name": ["not", "a", "string"]},
+    )
+    assert (
+        verify_print_pdf(poshmark_print, config=Config(anthropic_api_key="k")).ship_to_name
+        is None
+    )
+
+    monkeypatch.setattr(
+        verify_module, "call_vision_api", lambda png, config: {"ok": True, "problems": []}
+    )
+    assert (
+        verify_print_pdf(poshmark_print, config=Config(anthropic_api_key="k")).ship_to_name
+        is None
+    )
+
+
+def test_read_ship_to_name_reads_the_label(poshmark_print, monkeypatch):
+    monkeypatch.setattr(
+        verify_module,
+        "call_vision_api",
+        lambda png, config: {"ok": True, "problems": [], "ship_to_name": "VANESSA CHAVEZ"},
+    )
+
+    assert verify_module.read_ship_to_name(poshmark_print, Config(anthropic_api_key="k")) == (
+        "VANESSA CHAVEZ"
+    )
+
+
+def test_read_ship_to_name_without_key_never_calls_the_model(poshmark_print, monkeypatch):
+    def must_not_run(png, config):
+        raise AssertionError("the vision call ran without an API key")
+
+    monkeypatch.setattr(verify_module, "call_vision_api", must_not_run)
+
+    assert verify_module.read_ship_to_name(poshmark_print, no_llm_config()) is None
+    assert verify_module.read_ship_to_name(poshmark_print, None) is None
+
+
+def test_read_ship_to_name_failure_degrades_to_none(poshmark_print, monkeypatch):
+    def exploding(png, config):
+        raise RuntimeError("connection reset")
+
+    monkeypatch.setattr(verify_module, "call_vision_api", exploding)
+
+    assert (
+        verify_module.read_ship_to_name(poshmark_print, Config(anthropic_api_key="k"))
+        is None
+    )
+
+
 def test_parse_verdict_reads_fenced_json():
     reply = '```json\n{"ok": false, "problems": ["address is cut"]}\n```'
 
