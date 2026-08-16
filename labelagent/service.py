@@ -25,7 +25,7 @@ from .ingest import LAST_POLL_KEY, Fetcher, clean_person_name, make_fetcher, pol
 from .models import Label, LabelStatus, Level, Stage
 from .pipeline import TARGET_HEIGHT, TARGET_WIDTH, process_label_pdf
 from .printing import JobStatus, Printer, PrinterUnavailable, make_printer
-from .verify import read_ship_to_name, verify_print_pdf
+from .verify import read_ship_to_name, verify_print_pdf, vision_available
 
 AGENT_STATE_KEY = "agent_state"
 AUTO_PRINT_KEY = "auto_print"
@@ -531,14 +531,16 @@ class AgentService:
         an API key the raster label PDFs cannot be read at all, so say so
         instead of quietly doing nothing.
         """
-        if not self.config.anthropic_api_key:
+        if not vision_available(self.config):
             return {
                 "checked": 0,
                 "filled": 0,
                 "problems": [],
                 "detail": (
-                    "no Anthropic API key configured: the label PDFs are images, "
-                    "so there is nothing that can read the buyer name off them"
+                    "no vision provider configured: the label PDFs are images, so "
+                    "there is nothing that can read the buyer name off them. Set "
+                    "ANTHROPIC_API_KEY, or REPLICATE_API_TOKEN with "
+                    "vision_provider = \"replicate\""
                 ),
             }
 

@@ -427,7 +427,10 @@ def test_backfill_without_api_key_says_why_it_cannot_run(tmp_path, monkeypatch):
     try:
         result = service.backfill_buyer_names()
         assert result["filled"] == 0
-        assert "API key" in result["detail"]
+        assert "no vision provider configured" in result["detail"]
+        # and it names both ways to fix that
+        assert "ANTHROPIC_API_KEY" in result["detail"]
+        assert "REPLICATE_API_TOKEN" in result["detail"]
     finally:
         db.close()
 

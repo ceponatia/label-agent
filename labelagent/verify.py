@@ -29,6 +29,21 @@ MAX_INK = 0.60
 
 VISION_MODEL = "claude-haiku-4-5"
 VISION_MAX_TOKENS = 300
+
+ANTHROPIC = "anthropic"
+REPLICATE = "replicate"
+# Replicate bills its own Claude proxy at Anthropic's own rate, so going through
+# it saves nothing; Gemini Flash is about half that and reads documents well,
+# which is why it is the default there. Both are "Warm" proxies to always-on
+# endpoints - the per-GPU-second community models on Replicate cold-boot for
+# anywhere up to minutes, which a label waiting to print cannot afford.
+DEFAULT_VISION_MODELS = {
+    ANTHROPIC: VISION_MODEL,
+    REPLICATE: "google/gemini-3-flash",
+}
+# Replicate's own Claude wrapper scales images to 0.5 MP before the model sees
+# them, which is exactly the detail a printed name lives in.
+REPLICATE_MAX_IMAGE_RESOLUTION = 2
 PREVIEW_MAX_HEIGHT = 1000
 VISION_PROMPT = """This image is a USPS shipping label prepared for printing on 4x6 label stock.
 
@@ -111,7 +126,7 @@ def verify_print_pdf(
                         f"barcode does not match tracking number {expected_tracking}"
                     )
 
-        if config is not None and config.anthropic_api_key:
+        if vision_available(config):
             try:
                 verdict = call_vision_api(_render_preview_png(page), config)
                 source = "deterministic+llm"
@@ -129,13 +144,14 @@ def read_ship_to_name(pdf_path: str | Path, config: Config | None) -> str | None
     """Read just the recipient name off a label PDF via the vision model.
 
     Used to backfill buyer names on labels that were ingested before the name
-    was captured. Returns None without an API key (raster labels have no text
-    layer to fall back to) and when the model reads nothing. A failing vision
-    call raises: the backfill exists to answer "why is the buyer missing?",
-    and swallowing the API error here once left it reporting "0 filled" with
-    no way to tell a dead API key from an unreadable label.
+    was captured. Returns None with no vision provider configured (raster
+    labels have no text layer to fall back to) and when the model reads
+    nothing. A failing vision call raises: the backfill exists to answer "why
+    is the buyer missing?", and swallowing the API error here once left it
+    reporting "0 filled" with no way to tell a dead key from an unreadable
+    label.
     """
-    if config is None or not config.anthropic_api_key:
+    if not vision_available(config):
         return None
     with fitz.open(str(pdf_path)) as doc:
         if doc.page_count == 0:
@@ -151,13 +167,73 @@ def decode_barcodes(image) -> list[str]:
     return [code.data.decode("utf-8", "replace") for code in pyzbar.decode(image)]
 
 
+def vision_provider(config: Config | None) -> str:
+    return (getattr(config, "vision_provider", "") or ANTHROPIC).strip().lower()
+
+
+def vision_model(config: Config) -> str:
+    configured = (getattr(config, "vision_model", "") or "").strip()
+    return configured or DEFAULT_VISION_MODELS.get(vision_provider(config), VISION_MODEL)
+
+
+def vision_available(config: Config | None) -> bool:
+    """Whether a vision check can run at all.
+
+    The label PDFs are raster images with no text layer, so without a key there
+    is nothing that can read them - callers skip the check rather than fail.
+    """
+    if config is None:
+        return False
+    if vision_provider(config) == REPLICATE:
+        return bool(getattr(config, "replicate_api_token", ""))
+    return bool(config.anthropic_api_key)
+
+
 def call_vision_api(png: bytes, config: Config) -> dict:
     """Ask the vision model whether the label is complete. Tests monkeypatch this."""
+    if vision_provider(config) == REPLICATE:
+        return _call_replicate(png, config)
+    return _call_anthropic(png, config)
+
+
+def _call_replicate(png: bytes, config: Config) -> dict:
+    """Run the vision check through Replicate.
+
+    Replicate exposes no JSON-schema enforcement on any vision model, so the
+    reply is parsed with the same tolerant reader used everywhere else.
+    """
+    import replicate
+
+    model = vision_model(config)
+    data_uri = "data:image/png;base64," + base64.standard_b64encode(png).decode("ascii")
+    payload: dict = {"prompt": VISION_PROMPT}
+    if model.startswith("anthropic/"):
+        payload["image"] = data_uri
+        payload["max_tokens"] = VISION_MAX_TOKENS
+        payload["max_image_resolution"] = REPLICATE_MAX_IMAGE_RESOLUTION
+    else:
+        payload["images"] = [data_uri]
+
+    client = replicate.Client(api_token=config.replicate_api_token)
+    output = client.run(model, input=payload)
+    return parse_verdict(_replicate_text(output))
+
+
+def _replicate_text(output) -> str:
+    """Replicate hands text back as a string or as a list of chunks."""
+    if isinstance(output, str):
+        return output
+    if isinstance(output, (list, tuple)):
+        return "".join(str(chunk) for chunk in output)
+    return str(output)
+
+
+def _call_anthropic(png: bytes, config: Config) -> dict:
     import anthropic
 
     client = anthropic.Anthropic(api_key=config.anthropic_api_key)
     message = client.messages.create(
-        model=VISION_MODEL,
+        model=vision_model(config),
         max_tokens=VISION_MAX_TOKENS,
         messages=[
             {
