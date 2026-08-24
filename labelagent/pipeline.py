@@ -187,8 +187,11 @@ def top_instruction_label_bbox(page: fitz.Page) -> fitz.Rect | None:
     if run_start is not None and end_row - run_start >= gap_min:
         blank_runs.append((run_start, end_row))
 
+    # Multiple blank runs can occur between lines of the warning itself. The
+    # separator we want is the *lowest* plausible one, immediately above the
+    # shipping-label body; choosing by largest area instead favored an earlier
+    # inter-line gap and could leave the last warning line in the crop.
     best: fitz.Rect | None = None
-    best_area = 0.0
     for gap_start, gap_end in blank_runs:
         upper = mask[:gap_start]
         lower = mask[gap_end:]
@@ -221,10 +224,8 @@ def top_instruction_label_bbox(page: fitz.Page) -> fitz.Rect | None:
         if not BANNER_LABEL_ASPECT_RANGE[0] <= aspect <= BANNER_LABEL_ASPECT_RANGE[1]:
             continue
 
-        area = _area(rect)
-        if area > best_area:
+        if best is None or rect.y0 > best.y0:
             best = rect
-            best_area = area
 
     return best
 
