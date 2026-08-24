@@ -45,9 +45,9 @@ DEFAULT_VISION_MODELS = {
 # them, which is exactly the detail a printed name lives in.
 REPLICATE_MAX_IMAGE_RESOLUTION = 2
 PREVIEW_MAX_HEIGHT = 1000
-VISION_PROMPT = """This image is a USPS shipping label prepared for printing on 4x6 label stock.
+VISION_PROMPT = """This image is a prepaid shipping label prepared for printing on 4x6 label stock. USPS and FedEx labels are both valid; do not treat the carrier being FedEx instead of USPS as a problem.
 
-Check that it is complete and printable: the tracking barcode is fully visible and uncut, the ship-to address is complete, and the postage block is present. Ignore small white margins.
+Check that it is complete and printable: the main tracking barcode is fully visible and uncut, the ship-to address is complete, and the carrier/postage block is present. Ignore small white margins and any carrier-specific layout differences.
 
 Also read the recipient's name from the ship-to (delivery) address block: it is the first line of that address, above the street line. Do not use the sender/return address.
 
