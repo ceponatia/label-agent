@@ -25,9 +25,10 @@ PLATFORMS = ("poshmark", "vinted")
 PROMPT = """You classify seller emails for a shipping-label printing agent.
 
 Decide whether this email is a Poshmark or Vinted email that carries a prepaid
-USPS shipping label as a PDF attachment (a sale/label email), as opposed to an
-offer, comment, marketing or unrelated email. Forwarded copies (Fwd:, headers
-quoted in the body) count as label emails.
+shipping label as a PDF attachment (a sale/label email), as opposed to an
+offer, comment, marketing or unrelated email. USPS and FedEx labels are both
+valid and should be accepted. Forwarded copies (Fwd:, headers quoted in the
+body) count as label emails.
 
 From: {sender}
 Subject: {subject}
