@@ -3,6 +3,7 @@
 Pure functions: no database access, no network, no LLM.
 """
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -33,10 +34,11 @@ UNION_AREA_RANGE = (0.05, 0.90)
 UNION_ASPECT_RANGE = (1.0, 3.0)
 
 # Vinted sometimes puts a three-line "Ship with FedEx ONLY" warning above the
-# actual label. The real PDFs are raster images, so this cannot rely on text
-# extraction. Instead we recognize the layout: a small instruction band, a
-# sizeable blank separator, then a much denser label occupying most of the
-# remaining portrait page.
+# actual label. The layout detector below can find the likely label beneath it,
+# but layout alone is not proof: an ordinary label can also have a sparse header,
+# whitespace and a dense barcode section. A layout-only match is therefore never
+# allowed to auto-print. It becomes safe for auto-print only when the PDF text
+# layer contains recognizable wording from the known warning.
 BANNER_GAP_MIN_PT = 8.0
 BANNER_SEARCH_START = 0.06
 BANNER_SEARCH_END = 0.38
@@ -50,6 +52,10 @@ BANNER_LABEL_ASPECT_RANGE = (1.05, 2.2)
 
 NO_BBOX_PROBLEM = (
     "no label bounding box found; the whole original page was scaled to 4x6 instead"
+)
+AMBIGUOUS_BANNER_PROBLEM = (
+    "possible top carrier-instruction banner found, but its warning text could not "
+    "be confirmed; review the cropped label before printing"
 )
 
 
@@ -86,12 +92,22 @@ def process_label_pdf(original_pdf: str | Path, output_pdf: str | Path) -> Pipel
         # Check for the Vinted/FedEx-style instruction banner before the normal
         # 4x6 passthrough. Those files can already be 4x6 overall, but the real
         # label is shrunk below the warning and should be enlarged back to fill
-        # the sheet.
+        # the sheet. Crucially, layout alone is not enough to auto-pass the crop:
+        # if the warning wording cannot be recognized, the candidate is held for
+        # human review instead of silently printing with possible header loss.
         banner_bbox = top_instruction_label_bbox(page)
         if banner_bbox is not None:
             clip = _with_margin(banner_bbox, page_rect)
             _write_fitted(doc, 0, clip, destination, stretch=False)
-            return PipelineResult(True, str(destination), "banner-crop", False, [])
+            if carrier_warning_text_matches(page.get_text("text")):
+                return PipelineResult(True, str(destination), "banner-crop", False, [])
+            return PipelineResult(
+                True,
+                str(destination),
+                "banner-crop",
+                True,
+                [AMBIGUOUS_BANNER_PROBLEM],
+            )
 
         if _is_four_by_six(page_rect.width, page_rect.height):
             _write_fitted(doc, 0, page_rect, destination, stretch=True)
@@ -114,13 +130,31 @@ def process_label_pdf(original_pdf: str | Path, output_pdf: str | Path) -> Pipel
         return PipelineResult(True, str(destination), method, False, [])
 
 
+def carrier_warning_text_matches(text: str) -> bool:
+    """True only for recognizable wording from the known FedEx-only warning.
+
+    Requiring multiple distinctive phrases keeps generic carrier/service text on
+    an ordinary shipping label from authorizing a destructive top crop.
+    """
+    normalized = (text or "").lower().replace("’", "'").replace("'", "")
+    normalized = re.sub(r"\s+", " ", normalized)
+    if "fedex" not in normalized or "usps" not in normalized:
+        return False
+
+    signals = (
+        "ship with fedex only" in normalized,
+        "wont be paid" in normalized or "will not be paid" in normalized,
+        "parcel will be lost" in normalized,
+    )
+    return sum(signals) >= 2
+
+
 def top_instruction_label_bbox(page: fitz.Page) -> fitz.Rect | None:
     """Find a dense shipping label below a small separated top instruction band.
 
-    Vinted's FedEx warning is part of the raster page, not a removable PDF text
-    object. This uses only layout, and deliberately requires a portrait page,
-    sparse upper band, clear whitespace separator, and large lower label so a
-    normal shipping label is not cropped just because it has some white space.
+    This function deliberately detects layout only. Its result is a *candidate*,
+    not permission to auto-print a crop; `process_label_pdf` separately requires
+    recognizable warning text before clearing `needs_review`.
     """
     import numpy as np
 
