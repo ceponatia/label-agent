@@ -32,6 +32,22 @@ CONTOUR_ASPECT_RANGE = (1.15, 2.2)
 UNION_AREA_RANGE = (0.05, 0.90)
 UNION_ASPECT_RANGE = (1.0, 3.0)
 
+# Vinted sometimes puts a three-line "Ship with FedEx ONLY" warning above the
+# actual label. The real PDFs are raster images, so this cannot rely on text
+# extraction. Instead we recognize the layout: a small instruction band, a
+# sizeable blank separator, then a much denser label occupying most of the
+# remaining portrait page.
+BANNER_GAP_MIN_PT = 8.0
+BANNER_SEARCH_START = 0.06
+BANNER_SEARCH_END = 0.38
+BANNER_UPPER_MAX_INK = 0.08
+BANNER_LOWER_MIN_INK = 0.015
+BANNER_DENSITY_RATIO = 1.5
+BANNER_LABEL_MIN_WIDTH = 0.65
+BANNER_LABEL_MIN_HEIGHT = 0.50
+BANNER_LABEL_MAX_BOTTOM_GAP = 0.15
+BANNER_LABEL_ASPECT_RANGE = (1.05, 2.2)
+
 NO_BBOX_PROBLEM = (
     "no label bounding box found; the whole original page was scaled to 4x6 instead"
 )
@@ -41,7 +57,7 @@ NO_BBOX_PROBLEM = (
 class PipelineResult:
     ok: bool
     print_path: str | None
-    method: str  # "passthrough" | "vector-crop" | "raster-crop" | "whole-page" | "none"
+    method: str  # "passthrough" | "banner-crop" | "vector-crop" | "raster-crop" | "whole-page" | "none"
     needs_review: bool
     problems: list[str] = field(default_factory=list)
 
@@ -67,6 +83,16 @@ def process_label_pdf(original_pdf: str | Path, output_pdf: str | Path) -> Pipel
         if page_rect.is_empty or page_rect.is_infinite:
             return _failed("pdf page has no usable size")
 
+        # Check for the Vinted/FedEx-style instruction banner before the normal
+        # 4x6 passthrough. Those files can already be 4x6 overall, but the real
+        # label is shrunk below the warning and should be enlarged back to fill
+        # the sheet.
+        banner_bbox = top_instruction_label_bbox(page)
+        if banner_bbox is not None:
+            clip = _with_margin(banner_bbox, page_rect)
+            _write_fitted(doc, 0, clip, destination, stretch=False)
+            return PipelineResult(True, str(destination), "banner-crop", False, [])
+
         if _is_four_by_six(page_rect.width, page_rect.height):
             _write_fitted(doc, 0, page_rect, destination, stretch=True)
             return PipelineResult(True, str(destination), "passthrough", False, [])
@@ -86,6 +112,87 @@ def process_label_pdf(original_pdf: str | Path, output_pdf: str | Path) -> Pipel
         clip = _with_margin(bbox, page_rect)
         _write_fitted(doc, 0, clip, destination, stretch=False)
         return PipelineResult(True, str(destination), method, False, [])
+
+
+def top_instruction_label_bbox(page: fitz.Page) -> fitz.Rect | None:
+    """Find a dense shipping label below a small separated top instruction band.
+
+    Vinted's FedEx warning is part of the raster page, not a removable PDF text
+    object. This uses only layout, and deliberately requires a portrait page,
+    sparse upper band, clear whitespace separator, and large lower label so a
+    normal shipping label is not cropped just because it has some white space.
+    """
+    import numpy as np
+
+    page_rect = page.rect
+    if page_rect.height <= page_rect.width:
+        return None
+
+    pixmap = page.get_pixmap(dpi=RASTER_DPI, colorspace=fitz.csGRAY)
+    gray = np.frombuffer(pixmap.samples, dtype=np.uint8)
+    gray = gray.reshape(pixmap.height, pixmap.stride)[:, : pixmap.width]
+    mask = gray < DARK_THRESHOLD
+    if not mask.any():
+        return None
+
+    height, width = mask.shape
+    start_row = int(height * BANNER_SEARCH_START)
+    end_row = int(height * BANNER_SEARCH_END)
+    gap_min = max(1, round(BANNER_GAP_MIN_PT * RASTER_DPI / 72.0))
+    ink_rows = mask.any(axis=1)
+
+    blank_runs: list[tuple[int, int]] = []
+    run_start: int | None = None
+    for row in range(start_row, min(end_row, height)):
+        if not ink_rows[row] and run_start is None:
+            run_start = row
+        elif ink_rows[row] and run_start is not None:
+            if row - run_start >= gap_min:
+                blank_runs.append((run_start, row))
+            run_start = None
+    if run_start is not None and end_row - run_start >= gap_min:
+        blank_runs.append((run_start, end_row))
+
+    best: fitz.Rect | None = None
+    best_area = 0.0
+    for gap_start, gap_end in blank_runs:
+        upper = mask[:gap_start]
+        lower = mask[gap_end:]
+        if not upper.any() or not lower.any():
+            continue
+
+        upper_ink = float(upper.mean())
+        lower_ink = float(lower.mean())
+        if upper_ink <= 0 or upper_ink > BANNER_UPPER_MAX_INK:
+            continue
+        if lower_ink < BANNER_LOWER_MIN_INK:
+            continue
+        if lower_ink < upper_ink * BANNER_DENSITY_RATIO:
+            continue
+
+        ys, xs = np.nonzero(lower)
+        if not len(xs):
+            continue
+        x0, x1 = int(xs.min()), int(xs.max()) + 1
+        y0, y1 = int(ys.min()) + gap_end, int(ys.max()) + gap_end + 1
+        rect = _pixels_to_points((x0, y0, x1 - x0, y1 - y0), page)
+
+        if rect.width < page_rect.width * BANNER_LABEL_MIN_WIDTH:
+            continue
+        if rect.height < page_rect.height * BANNER_LABEL_MIN_HEIGHT:
+            continue
+        if page_rect.y1 - rect.y1 > page_rect.height * BANNER_LABEL_MAX_BOTTOM_GAP:
+            continue
+        aspect = max(rect.width, rect.height) / min(rect.width, rect.height)
+        if not BANNER_LABEL_ASPECT_RANGE[0] <= aspect <= BANNER_LABEL_ASPECT_RANGE[1]:
+            continue
+
+        area = _area(rect)
+        if area > best_area:
+            best = rect
+            best_area = area
+
+    return best
 
 
 def vector_label_bbox(page: fitz.Page) -> fitz.Rect | None:
