@@ -110,7 +110,10 @@ def test_make_printer_file_keyword(tmp_path):
     )
 
 
-def test_make_printer_cups(tmp_path):
+def test_make_printer_cups(monkeypatch, tmp_path):
+    # make_printer picks WindowsPrinter on Windows, so the CUPS branch only
+    # exists off it. Pin the platform instead of depending on the test host.
+    monkeypatch.setattr(printing, "IS_WINDOWS", False)
     printer = make_printer(
         Config(
             data_dir=str(tmp_path),

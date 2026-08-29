@@ -39,13 +39,21 @@ def make_vinted_fedex_banner_label(path: Path) -> None:
         doc.save(path)
 
 
+def unwrapped(prompt: str) -> str:
+    """Prompts are hard-wrapped, so a phrase can straddle a line break."""
+    return " ".join(prompt.split())
+
+
 def test_fedex_is_explicitly_valid_for_email_classification():
-    assert "USPS and FedEx labels are both valid" in CLASSIFY_PROMPT
+    assert "USPS and FedEx labels are both valid" in unwrapped(CLASSIFY_PROMPT)
 
 
 def test_fedex_is_explicitly_valid_for_vision_verification():
-    assert "USPS and FedEx labels are both valid" in VISION_PROMPT
-    assert "do not treat the carrier being FedEx instead of USPS as a problem" in VISION_PROMPT
+    assert "USPS and FedEx labels are both valid" in unwrapped(VISION_PROMPT)
+    assert (
+        "do not treat the carrier being FedEx instead of USPS as a problem"
+        in unwrapped(VISION_PROMPT)
+    )
 
 
 def test_vinted_fedex_instruction_banner_is_removed(tmp_path):
