@@ -199,6 +199,52 @@ def test_windows_submit_sumatra_failure_is_actionable(monkeypatch, pdf, sumatra)
         WindowsPrinter("Missing", str(sumatra)).submit(str(pdf))
 
 
+def test_windows_submit_generic_failure_blames_the_print_system(
+    monkeypatch, pdf, sumatra
+):
+    install(
+        monkeypatch,
+        {
+            "powershell.exe": (0, "[]", ""),
+            str(sumatra): (1, "", "ParseFlags: argName: '-silent', arg: 1\n"),
+        },
+    )
+    with pytest.raises(PrinterUnavailable, match="is the printer reachable") as excinfo:
+        WindowsPrinter("Canon", str(sumatra)).submit(str(pdf))
+    assert "ParseFlags" not in str(excinfo.value)
+
+
+def test_windows_submit_unknown_code_drops_flag_parse_trace(monkeypatch, pdf, sumatra):
+    install(
+        monkeypatch,
+        {
+            "powershell.exe": (0, "[]", ""),
+            str(sumatra): (
+                99,
+                "",
+                "ParseFlags: argName: '-silent', arg: 1\nspooler refused the job\n",
+            ),
+        },
+    )
+    with pytest.raises(PrinterUnavailable, match="spooler refused the job") as excinfo:
+        WindowsPrinter("Canon", str(sumatra)).submit(str(pdf))
+    assert "ParseFlags" not in str(excinfo.value)
+
+
+def test_windows_submit_unknown_code_with_only_trace_stays_readable(
+    monkeypatch, pdf, sumatra
+):
+    install(
+        monkeypatch,
+        {
+            "powershell.exe": (0, "[]", ""),
+            str(sumatra): (99, "", "ParseFlags: argName: '-silent', arg: 1\n"),
+        },
+    )
+    with pytest.raises(PrinterUnavailable, match="unknown SumatraPDF error"):
+        WindowsPrinter("Canon", str(sumatra)).submit(str(pdf))
+
+
 def test_windows_submit_sumatra_timeout_is_actionable(monkeypatch, pdf, sumatra):
     install(
         monkeypatch,

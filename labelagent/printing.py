@@ -23,12 +23,17 @@ WINDOWS_JOB_PREFIX = "win-"
 WINDOWS_COMPLETE_PREFIX = "win-complete-"
 WINDOWS_CANCELLED_RE = re.compile(r"cancell?ed|delet|abort", re.IGNORECASE)
 SUMATRA_ERRORS = {
+    1: "the print system reported a failure (is the printer reachable from Windows?)",
     2: "could not open the PDF",
     3: "the PDF does not allow printing",
     4: "the printer does not exist",
     5: "the printer driver or device failed",
     6: "printing is disabled by policy",
 }
+# SumatraPDF 3.6.1 traces its command-line parsing to stderr on every run. Those
+# lines say nothing about why a print failed, and left in the fallback detail
+# they make a printer problem read like a CLI-argument bug.
+SUMATRA_TRACE_PREFIX = "ParseFlags:"
 
 # `lpstat -l` labels the job-state-reasons line; IPP spells it "canceled", but
 # match both spellings so a differently-worded CUPS build cannot read as a
@@ -242,10 +247,7 @@ class WindowsPrinter:
             raise PrinterUnavailable(f"could not start SumatraPDF: {exc}") from exc
 
         if result.returncode != 0:
-            detail = SUMATRA_ERRORS.get(
-                result.returncode,
-                (result.stderr or result.stdout or "unknown SumatraPDF error").strip(),
-            )
+            detail = self._failure_detail(result)
             raise PrinterUnavailable(
                 f"SumatraPDF print failed ({result.returncode}): {detail}"
             )
@@ -373,6 +375,21 @@ class WindowsPrinter:
         if len(new_jobs) == 1:
             return new_jobs[0]
         return None
+
+    @staticmethod
+    def _failure_detail(result: subprocess.CompletedProcess) -> str:
+        known = SUMATRA_ERRORS.get(result.returncode)
+        if known:
+            return known
+        for stream in (result.stderr, result.stdout):
+            lines = [
+                line.strip()
+                for line in (stream or "").splitlines()
+                if line.strip() and not line.strip().startswith(SUMATRA_TRACE_PREFIX)
+            ]
+            if lines:
+                return " ".join(lines)
+        return "unknown SumatraPDF error"
 
 
 def find_sumatra(explicit: str = "") -> str:
