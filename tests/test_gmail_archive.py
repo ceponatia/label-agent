@@ -1,7 +1,7 @@
 import pytest
 
 from labelagent.config import Config
-from labelagent.ingest import ImapFetcher, IngestError, PROCESSED_LABEL
+from labelagent.ingest import PROCESSED_LABEL, ImapFetcher, IngestError
 
 
 class StubMailbox:

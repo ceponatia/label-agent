@@ -162,7 +162,7 @@ def test_a_second_check_changes_nothing(env):
     assert second["printed_or_queued"] == 0
     assert second["errors"] == []
 
-    assert [(l.id, l.status, l.print_count) for l in db.list_labels()] == before
+    assert [(label.id, label.status, label.print_count) for label in db.list_labels()] == before
     assert len(db.list_events(limit=1000)) == events_before
     assert len(list(printer.out_dir.glob("*.pdf"))) == 2
 

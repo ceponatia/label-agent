@@ -9,7 +9,7 @@ from labelagent.config import Config
 from labelagent.db import Database
 from labelagent.ingest import LAST_POLL_KEY
 from labelagent.models import LabelStatus, Level, Stage
-from labelagent.printing import JobStatus, PrinterUnavailable, FilePrinter
+from labelagent.printing import FilePrinter, JobStatus, PrinterUnavailable
 from labelagent.scheduler import (
     POLL_JOB_ID,
     PRUNE_INTERVAL_HOURS,
@@ -249,7 +249,7 @@ def blank_label_eml(tmp_path: Path) -> bytes:
     msg["Subject"] = '"Empty Box" just sold to @nobody on Poshmark!'
     msg["Date"] = "Sat, 1 Aug 2026 12:00:00 -0400"
     msg["Message-ID"] = "<posh-blank-1@poshmark.com>"
-    msg.set_content(f"Tracking Number\n9400111899223197428999\n\nOrder ID\nabc123def456\n")
+    msg.set_content("Tracking Number\n9400111899223197428999\n\nOrder ID\nabc123def456\n")
     msg.add_attachment(
         pdf_path.read_bytes(),
         maintype="application",
