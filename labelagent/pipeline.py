@@ -154,7 +154,6 @@ def top_instruction_label_bbox(page: fitz.Page) -> fitz.Rect | None:
         blank_runs.append((run_start, end_row))
 
     best: fitz.Rect | None = None
-    best_area = 0.0
     for gap_start, gap_end in blank_runs:
         upper = mask[:gap_start]
         lower = mask[gap_end:]
@@ -187,10 +186,13 @@ def top_instruction_label_bbox(page: fitz.Page) -> fitz.Rect | None:
         if not BANNER_LABEL_ASPECT_RANGE[0] <= aspect <= BANNER_LABEL_ASPECT_RANGE[1]:
             continue
 
-        area = _area(rect)
-        if area > best_area:
-            best = rect
-            best_area = area
+        # Keep the lowest qualifying split rather than the largest region. A
+        # multi-line banner separates into one gap per line, and every gap but
+        # the last leaves instruction text sitting on top of the label -- which
+        # also makes those regions the larger ones. The size, aspect and
+        # bottom-gap guards above are what stop this from cropping into the
+        # label itself.
+        best = rect
 
     return best
 
