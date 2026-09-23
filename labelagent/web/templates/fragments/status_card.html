@@ -1,0 +1,44 @@
+<section class="card status-card" id="status-card"{% if oob %} hx-swap-oob="outerHTML"{% endif %}>
+  <div class="status-head">
+    <span class="state state-{{ state.agent_state }}">{{ state.agent_state | title }}</span>
+    <span class="printer">
+      <span class="dot {{ 'ok' if state.printer_available else 'bad' }}"
+            title="{{ 'Printer available' if state.printer_available else 'Printer unreachable' }}"></span>
+      {{ state.printer_name or 'no printer configured' }}
+      <em>{{ '' if state.printer_available else '(unreachable)' }}</em>
+    </span>
+  </div>
+
+  <p class="muted last-check">
+    Last email check: {{ state.last_poll_at or 'never' }}
+  </p>
+
+  <div class="actions">
+    {% if state.agent_state == 'paused' %}
+      <button class="btn primary" hx-post="/api/agent/resume"
+              hx-target="#status-card" hx-swap="outerHTML">Resume</button>
+    {% else %}
+      <button class="btn" hx-post="/api/agent/pause"
+              hx-target="#status-card" hx-swap="outerHTML">Pause</button>
+    {% endif %}
+
+    {# #check-result lives outside this card, on the page: the card refreshes
+       itself every few seconds and would otherwise wipe the answer a moment
+       after it arrived. (hx-preserve is not an option - htmx 1.9 does not
+       apply it to out-of-band swaps.) #}
+    <button class="btn" hx-post="/api/agent/check-now"
+            hx-target="#check-result" hx-swap="innerHTML"
+            hx-indicator="#check-result">Check now</button>
+
+    <button class="btn toggle {{ 'on' if state.auto_print else 'off' }}"
+            hx-post="/api/agent/auto-print"
+            hx-vals='{"on": {{ 'false' if state.auto_print else 'true' }}}'
+            hx-target="#status-card" hx-swap="outerHTML">
+      <span class="knob"></span>Auto-print {{ 'on' if state.auto_print else 'off' }}
+    </button>
+  </div>
+
+  {% if state.agent_state == 'paused' %}
+    <p class="note">Paused: email is still read and labels are still prepared &mdash; nothing is sent to the printer.</p>
+  {% endif %}
+</section>

@@ -1,0 +1,13 @@
+{% import "macros.html" as m %}
+<section class="card" id="attention-list"{% if oob %} hx-swap-oob="outerHTML"{% endif %}>
+  <h2>Needs attention</h2>
+  {% if attention %}
+    <ul class="list">
+      {% for label in attention %}
+        {{ m.label_row(label, 'Print anyway' if label.status == 'duplicate' else 'Print', 'attention') }}
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="empty">Nothing waiting. Everything printed or in flight.</p>
+  {% endif %}
+</section>

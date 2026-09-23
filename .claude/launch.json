@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "label-agent",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": ["-m", "labelagent", "serve"],
+      "port": 8080
+    }
+  ]
+}

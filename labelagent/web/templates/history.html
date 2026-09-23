@@ -1,0 +1,42 @@
+{% extends "layout.html" %}
+{% import "macros.html" as m %}
+{% block title %}History &middot; Label Agent{% endblock %}
+
+{% block content %}
+<section class="card">
+  <form class="daypick" method="get" action="/history">
+    <a class="btn square" href="/history?date={{ prev_day }}" aria-label="Previous day">&larr;</a>
+    <input type="date" name="date" value="{{ day }}" onchange="this.form.submit()">
+    <a class="btn square {{ 'disabled' if is_today }}" href="/history?date={{ next_day }}"
+       aria-label="Next day">&rarr;</a>
+    <noscript><button class="btn" type="submit">Go</button></noscript>
+  </form>
+  <p class="muted">{{ labels | length }} label{{ '' if labels | length == 1 else 's' }} on {{ day }}</p>
+</section>
+
+<section class="card">
+  <h2>Printed &mdash; last {{ chart | length }} days</h2>
+  <div class="chart" role="img" aria-label="Printed labels per day">
+    {% for bar in chart %}
+      <div class="bar-col {{ 'current' if bar.date == day }}" title="{{ bar.date }}: {{ bar.printed }} printed">
+        <span class="bar-n">{{ bar.printed or '' }}</span>
+        <span class="bar" style="height: {{ bar.pct }}%"></span>
+        <span class="bar-d">{{ bar.date[8:] }}</span>
+      </div>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="card">
+  <h2>{{ day }}</h2>
+  {% if labels %}
+    <ul class="list">
+      {% for label in labels %}
+        {{ m.label_row(label, 'Reprint' if label.print_count else 'Print') }}
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="empty">Nothing on this day.</p>
+  {% endif %}
+</section>
+{% endblock %}

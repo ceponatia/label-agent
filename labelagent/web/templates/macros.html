@@ -1,0 +1,60 @@
+{% macro platform_badge(platform) -%}
+<span class="badge platform-{{ platform }}">{{ platform }}</span>
+{%- endmacro %}
+
+{% macro status_badge(status) -%}
+<span class="badge status-{{ status }}">{{ status | pretty }}</span>
+{%- endmacro %}
+
+{% macro thumb(label) -%}
+{% if label.print_path or label.original_path %}
+<img class="thumb" loading="lazy" alt=""
+     src="/api/labels/{{ label.id }}/preview.png?which={{ 'print' if label.print_path else 'original' }}">
+{% else %}
+<span class="thumb thumb-empty" aria-hidden="true"></span>
+{% endif %}
+{%- endmacro %}
+
+{# `scope` names the list this row sits in. The dashboard shows one label in
+   both "Needs attention" and "Today's labels", so an id built from the label
+   alone appears twice in the page and htmx writes the print result into
+   whichever copy it finds first - sometimes the row in the other section,
+   leaving the tapped button looking like it did nothing. #}
+{% macro result_id(label, scope) -%}
+result-{{ scope ~ '-' if scope }}{{ label.id }}
+{%- endmacro %}
+
+{% macro print_button(label, text='Print', scope='') -%}
+{% set target = '#' ~ result_id(label, scope) %}
+<button class="btn small"
+        hx-post="/api/labels/{{ label.id }}/print"
+        hx-target="{{ target }}"
+        hx-swap="innerHTML"
+        hx-indicator="{{ target }}">{{ text }}</button>
+<span class="result" id="{{ result_id(label, scope) }}"></span>
+{%- endmacro %}
+
+{% macro label_row(label, action_text='Print', scope='') -%}
+<li class="row">
+  <a class="row-main" href="/labels/{{ label.id }}">
+    {{ thumb(label) }}
+    <span class="row-text">
+      {% if label.buyer_name %}
+        <span class="row-title">{{ label.buyer_name }}:</span>
+        <span class="row-item">{{ label.item_title or 'Untitled label' }}</span>
+      {% else %}
+        {# No buyer read off the label yet: the item leads, and still wraps
+           rather than being cut off mid-word. #}
+        <span class="row-item row-item-lead">{{ label.item_title or 'Untitled label' }}</span>
+      {% endif %}
+      <span class="row-meta">
+        {{ platform_badge(label.platform) }}
+        {{ status_badge(label.status) }}
+        <span class="time">{{ (label.printed_at or label.created_at) | hhmm }}</span>
+      </span>
+      {% if label.status_detail %}<span class="row-detail">{{ label.status_detail }}</span>{% endif %}
+    </span>
+  </a>
+  <span class="row-actions">{{ print_button(label, action_text, scope) }}</span>
+</li>
+{%- endmacro %}
